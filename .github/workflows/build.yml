@@ -26,7 +26,7 @@ jobs:
       - name: Build Docker image (Android SDK/NDK toolchain)
         run: docker build -t telegram-build .
 
-      - name: Build one debug APK (fast compile check, not the full release matrix)
+      - name: Build one arm64-only debug APK (fast compile check, not the full 4-ABI release matrix)
         run: |
           set -o pipefail
           docker run --rm -v "${{ github.workspace }}:/home/source" telegram-build bash -lc '
@@ -34,7 +34,7 @@ jobs:
             mkdir -p /home/source/TMessagesProj/build/outputs/apk
             cp -R /home/source/. /home/gradle
             cd /home/gradle
-            gradle :TMessagesProj_App:assembleAfatDebug --stacktrace --console=plain
+            gradle :TMessagesProj_App:assembleAfatciDebug --stacktrace --console=plain
             cp -R /home/gradle/TMessagesProj_App/build/outputs/apk/. /home/source/TMessagesProj/build/outputs/apk
           ' 2>&1 | tee build.log
 
