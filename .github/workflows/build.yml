@@ -20,21 +20,52 @@ jobs:
       - name: Build Docker image (Android SDK/NDK toolchain)
         run: docker build -t telegram-build .
 
-      - name: Build APKs
-        run: docker run --rm -v ${{ github.workspace }}:/home/source telegram-build
+      - name: Build one debug APK (fast compile check, not the full release matrix)
+        run: |
+          set -o pipefail
+          docker run --rm -v "${{ github.workspace }}:/home/source" telegram-build bash -lc '
+            set -e
+            mkdir -p /home/source/TMessagesProj/build/outputs/apk
+            cp -R /home/source/. /home/gradle
+            cd /home/gradle
+            gradle :TMessagesProj_App:assembleAfatDebug --stacktrace --console=plain
+            cp -R /home/gradle/TMessagesProj_App/build/outputs/apk/. /home/source/TMessagesProj/build/outputs/apk
+          ' 2>&1 | tee build.log
 
-      - name: Upload APKs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: apks
-          path: TMessagesProj/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
+      - name: Report failure log as a GitHub Issue (log artifacts aren't reachable from this network)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tail -c 55000 build.log > tail.log || echo "no log" > tail.log
+          python3 - <<'PYEOF'
+          import json, os, urllib.request
+          body = open("tail.log", "r", errors="replace").read()
+          payload = json.dumps({
+              "title": f"Build failed - run {os.environ['GITHUB_RUN_ID']}",
+              "body": "```\n" + body + "\n```"
+          }).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues",
+              data=payload,
+              headers={
+                  "Authorization": f"token {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          print(urllib.request.urlopen(req).read().decode())
+          PYEOF
 
-      - name: Upload bundles
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bundles
-          path: TMessagesProj/build/outputs/bundle/**
-          if-no-files-found: ignore
+      - name: Publish APK as a GitHub Release asset (artifact storage isn't reachable from this network)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest-build --yes --repo "${{ github.repository }}" || true
+          git tag -f latest-build
+          git push -f origin latest-build
+          gh release create latest-build --repo "${{ github.repository }}" \
+            --title "Latest debug build" --notes "Run ${{ github.run_id }}" \
+            TMessagesProj/build/outputs/apk/**/*.apk

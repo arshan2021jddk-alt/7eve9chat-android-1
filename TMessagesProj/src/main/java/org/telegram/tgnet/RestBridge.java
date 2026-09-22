@@ -34,23 +34,26 @@ import java.util.concurrent.Executors;
  * types it knows how to translate. See ConnectionsManager.sendRequestInternal,
  * which calls tryHandle() before ever touching native/MTProto.
  *
- * Implemented so far: auth.sendCode, auth.signIn, messages.getDialogs
- * (first page only), messages.getHistory (most recent page only),
+ * Implemented so far: auth.sendCode, auth.signIn, messages.getDialogs,
+ * messages.getHistory (paginated - see historyLoadedCount),
  * messages.sendMessage (text only), contacts.getContacts,
  * messages.readHistory, upload.getFile (ranged HTTPS fetch - powers photo/
- * video/file rendering in messages and stories), stories.getAllStories,
- * stories.getPeerStories.
+ * video/file/avatar rendering in messages and stories), stories.getAllStories,
+ * stories.getPeerStories, messages.getSavedGifs.
  *
  * Everything else still needs its own translation added over time (this is
  * a large, incremental migration, not a drop-in swap) - unmapped requests
  * fail fast with a REST_BRIDGE_UNIMPLEMENTED error instead of silently
  * reaching native code.
  *
- * Known gaps: pagination (dialogs/history only ever return the first/most
- * recent page), media size/duration/dimensions are placeholders (backend
- * doesn't report them), group/channel admin features, calls, gifts, games,
- * explore/posts, stickers/gifs pickers, and avatars (UserProfilePhoto uses a
- * different FileLocation scheme not yet wired) are unmapped.
+ * Known gaps: dialogs pagination beyond page 1 (the backend has no concept
+ * of it - /messages/conversations always returns everything at once, so
+ * there is nothing to paginate), media size/duration/dimensions are
+ * placeholders (backend doesn't report them), group/channel admin features,
+ * calls, gifts, games, explore/posts, and the sticker picker (Telegram's
+ * sticker UI is organized around "sticker sets", which this backend's flat
+ * sticker list doesn't have a concept of - deliberately skipped rather than
+ * forcing a bad fit) are unmapped.
  */
 public class RestBridge {
 
@@ -92,6 +95,13 @@ public class RestBridge {
     // TL photo/document ids -> the backend URL they actually point to, so
     // upload.getFile can serve real bytes for chat media, avatars and stories.
     private final HashMap<Long, String> mediaUrlById = new HashMap<>();
+
+    // Backend history is page/limit based, not id-cursor based like Telegram's
+    // real protocol - this tracks how many messages we've already handed out
+    // per conversation so "load older messages" (offset_id != 0) can resolve
+    // to the right backend page. Not persisted: resets on process restart,
+    // which just means the next scroll-up re-starts from the newest page.
+    private final HashMap<String, Integer> historyLoadedCount = new HashMap<>();
 
     private RestBridge(int account) {
         currentAccount = account;
@@ -200,6 +210,10 @@ public class RestBridge {
             }
             if (request instanceof TL_stories.TL_stories_getPeerStories) {
                 handleGetPeerStories((TL_stories.TL_stories_getPeerStories) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getSavedGifs) {
+                handleGetSavedGifs((TLRPC.TL_messages_getSavedGifs) request, onComplete);
                 return true;
             }
         } catch (Exception e) {
@@ -432,6 +446,7 @@ public class RestBridge {
                     result.contacts.add(contact);
                 }
                 result.saved_count = result.contacts.size();
+                savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
@@ -560,6 +575,29 @@ public class RestBridge {
         });
     }
 
+    // ---------------------------------------------------------------
+    // messages.getSavedGifs -> GET /gifs
+    // ---------------------------------------------------------------
+    private void handleGetSavedGifs(TLRPC.TL_messages_getSavedGifs req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray gifs = requestArray("GET", "/gifs", null, true);
+                TLRPC.TL_messages_savedGifs result = new TLRPC.TL_messages_savedGifs();
+                for (int i = 0; i < gifs.length(); i++) {
+                    JSONObject g = gifs.getJSONObject(i);
+                    String url = absoluteUrl(g.getString("fileUrl"));
+                    TLRPC.TL_messageMediaDocument media = buildDocumentMedia(url, "video/mp4", null, "gif");
+                    result.gifs.add(media.document);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
     private TL_stories.TL_storyItem buildStoryItem(JSONObject story, boolean out) throws Exception {
         TL_stories.TL_storyItem item = new TL_stories.TL_storyItem();
         item.id = idFromMongoIdInt32(story.getString("_id"));
@@ -620,10 +658,12 @@ public class RestBridge {
                     return;
                 }
 
-                // Pagination beyond the first page isn't implemented yet - always
-                // fetches the most recent page. TODO: use req.offset_id/max_id.
-                String path = "/messages/" + conversationId + "?page=1&limit=" + Math.max(1, Math.min(req.limit, 100));
+                int limit = Math.max(1, Math.min(req.limit, 100));
+                int skip = req.offset_id == 0 ? 0 : historyLoadedCount.getOrDefault(conversationId, 0);
+                int page = (skip / limit) + 1;
+                String path = "/messages/" + conversationId + "?page=" + page + "&limit=" + limit;
                 JSONArray messages = requestArray("GET", path, null, true);
+                historyLoadedCount.put(conversationId, skip + messages.length());
 
                 TLRPC.TL_messages_messages result = new TLRPC.TL_messages_messages();
                 for (int i = 0; i < messages.length(); i++) {
@@ -641,6 +681,7 @@ public class RestBridge {
                 // App expects newest-first for getHistory.
                 java.util.Collections.reverse(result.messages);
 
+                savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
@@ -761,7 +802,12 @@ public class RestBridge {
     private void handleGetFile(TLRPC.TL_upload_getFile req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
-                long id = req.location != null ? req.location.id : 0;
+                long id = 0;
+                if (req.location instanceof TLRPC.TL_inputPeerPhotoFileLocation) {
+                    id = ((TLRPC.TL_inputPeerPhotoFileLocation) req.location).photo_id;
+                } else if (req.location != null) {
+                    id = req.location.id;
+                }
                 String url = mediaUrlById.get(id);
                 if (url == null) {
                     complete(onComplete, null, restError(404, "Unknown file reference"));
@@ -938,7 +984,7 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // JSON -> TLRPC.TL_user
     // ---------------------------------------------------------------
-    public static TLRPC.TL_user buildTLUser(JSONObject u, boolean self) throws Exception {
+    public TLRPC.TL_user buildTLUser(JSONObject u, boolean self) throws Exception {
         TLRPC.TL_user user = new TLRPC.TL_user();
         String mongoId = u.getString("_id");
         user.id = idFromMongoId(mongoId);
@@ -979,6 +1025,15 @@ public class RestBridge {
         user.self = self;
         user.contact = true;
         user.verified = u.optBoolean("isVerified", false);
+
+        String avatar = u.optString("avatar", null);
+        if (avatar != null && avatar.length() > 0) {
+            TLRPC.TL_userProfilePhoto photo = new TLRPC.TL_userProfilePhoto();
+            photo.photo_id = idForUrl(absoluteUrl(avatar));
+            photo.dc_id = 1;
+            user.photo = photo;
+            user.flags |= TLObject.FLAG_5; // photo present
+        }
 
         return user;
     }
