@@ -120,6 +120,11 @@ public class RestBridge {
     // this map (populated by buildTLMessage()) to recover the real id.
     private final HashMap<Integer, String> messageMongoIdByTlId = new HashMap<>();
 
+    // TL sticker set id -> Mongo StickerSet id, populated by
+    // handleGetAllStickers() so handleGetStickerSet() can resolve which set
+    // the UI is actually asking to open.
+    private final HashMap<Long, String> stickerSetMongoIdById = new HashMap<>();
+
     private RestBridge(int account) {
         currentAccount = account;
         authToken = prefs().getString("jwt", null);
@@ -270,6 +275,14 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_messages_getSavedGifs) {
                 handleGetSavedGifs((TLRPC.TL_messages_getSavedGifs) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getAllStickers) {
+                handleGetAllStickers((TLRPC.TL_messages_getAllStickers) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getStickerSet) {
+                handleGetStickerSet((TLRPC.TL_messages_getStickerSet) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_help_getCountriesList) {
@@ -993,6 +1006,94 @@ public class RestBridge {
         }
 
         return item;
+    }
+
+    // ---------------------------------------------------------------
+    // messages.getAllStickers -> GET /stickers/sets
+    // ---------------------------------------------------------------
+    private void handleGetAllStickers(TLRPC.TL_messages_getAllStickers req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray sets = requestArray("GET", "/stickers/sets", null, true);
+                TLRPC.TL_messages_allStickers result = new TLRPC.TL_messages_allStickers();
+                for (int i = 0; i < sets.length(); i++) {
+                    JSONObject s = sets.getJSONObject(i);
+                    String mongoId = s.getString("_id");
+                    long tlId = idFromMongoId(mongoId);
+                    stickerSetMongoIdById.put(tlId, mongoId);
+
+                    TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                    set.id = tlId;
+                    set.access_hash = 1;
+                    set.title = s.optString("title", "Stickers");
+                    set.short_name = s.optString("shortName", mongoId);
+                    set.count = 0;
+                    set.hash = 0;
+                    result.sets.add(set);
+                }
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.getStickerSet -> GET /stickers?setId=...
+    // ---------------------------------------------------------------
+    private void handleGetStickerSet(TLRPC.TL_messages_getStickerSet req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String mongoSetId = stickerSetMongoIdById.get(req.stickerset.id);
+                if (mongoSetId == null) {
+                    complete(onComplete, null, restError(404, "Unknown sticker set"));
+                    return;
+                }
+                JSONArray stickers = requestArray("GET", "/stickers?setId=" + mongoSetId, null, true);
+
+                TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                set.id = req.stickerset.id;
+                set.access_hash = 1;
+                set.title = "Stickers";
+                set.short_name = req.stickerset.short_name != null ? req.stickerset.short_name : mongoSetId;
+                set.count = stickers.length();
+                set.hash = 0;
+
+                TLRPC.TL_messages_stickerSet result = new TLRPC.TL_messages_stickerSet();
+                result.set = set;
+                for (int i = 0; i < stickers.length(); i++) {
+                    JSONObject st = stickers.getJSONObject(i);
+                    String url = absoluteUrl(st.getString("url"));
+                    TLRPC.TL_document doc = buildStickerDocument(url, set);
+                    result.documents.add(doc);
+                }
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private TLRPC.TL_document buildStickerDocument(String url, TLRPC.TL_stickerSet set) {
+        TLRPC.TL_messageMediaDocument media = buildDocumentMedia(url, "image/webp", null, "sticker");
+        TLRPC.TL_document document = (TLRPC.TL_document) media.document;
+
+        TLRPC.TL_documentAttributeSticker stickerAttr = new TLRPC.TL_documentAttributeSticker();
+        stickerAttr.alt = "";
+        TLRPC.TL_inputStickerSetID inputSet = new TLRPC.TL_inputStickerSetID();
+        inputSet.id = set.id;
+        inputSet.access_hash = set.access_hash;
+        stickerAttr.stickerset = inputSet;
+        document.attributes.add(stickerAttr);
+
+        TLRPC.TL_documentAttributeImageSize sizeAttr = new TLRPC.TL_documentAttributeImageSize();
+        sizeAttr.w = 512;
+        sizeAttr.h = 512;
+        document.attributes.add(sizeAttr);
+
+        return document;
     }
 
     private TLRPC.TL_error restError(int statusCode, String message) {
