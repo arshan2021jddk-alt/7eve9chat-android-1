@@ -8,6 +8,7 @@ import org.json.JSONObject;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
+import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_stars;
 import org.telegram.tgnet.tl.TL_stories;
@@ -1815,7 +1816,7 @@ public class RestBridge {
                         complete(onComplete, null, restError(code, "File fetch failed"));
                         return;
                     }
-                    byte[] data = readAll(conn.getInputStream());
+                    byte[] data = readAllBytes(conn.getInputStream());
 
                     TLRPC.TL_upload_file file = new TLRPC.TL_upload_file();
                     file.type = new TLRPC.TL_storage_fileUnknown();
@@ -2194,6 +2195,20 @@ public class RestBridge {
         } finally {
             conn.disconnect();
         }
+    }
+
+    // Binary-safe: used for downloaded files (images/video/etc). readAll()
+    // below is text-only (JSON responses) and must NOT be used for these,
+    // since decoding arbitrary bytes as a String and back corrupts them.
+    private static byte[] readAllBytes(InputStream stream) throws IOException {
+        if (stream == null) return new byte[0];
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int read;
+        while ((read = stream.read(buf)) != -1) {
+            out.write(buf, 0, read);
+        }
+        return out.toByteArray();
     }
 
     private static String readAll(InputStream stream) throws IOException {
