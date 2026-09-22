@@ -285,6 +285,30 @@ public class RestBridge {
                 handleGetStickerSet((TLRPC.TL_messages_getStickerSet) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_createChat) {
+                handleCreateChat((TLRPC.TL_messages_createChat) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_addChatUser) {
+                handleAddChatUser((TLRPC.TL_messages_addChatUser) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteChatUser) {
+                handleDeleteChatUser((TLRPC.TL_messages_deleteChatUser) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editChatAdmin) {
+                handleEditChatAdmin((TLRPC.TL_messages_editChatAdmin) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editChatTitle) {
+                handleEditChatTitle((TLRPC.TL_messages_editChatTitle) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteChat) {
+                handleLeaveChat((TLRPC.TL_messages_deleteChat) request, onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_help_getCountriesList) {
                 handleGetCountriesList((TLRPC.TL_help_getCountriesList) request, onComplete);
                 return true;
@@ -1094,6 +1118,170 @@ public class RestBridge {
         document.attributes.add(sizeAttr);
 
         return document;
+    }
+
+    // ---------------------------------------------------------------
+    // messages.createChat -> POST /conversations/group {type:'group'}
+    // ---------------------------------------------------------------
+    private void handleCreateChat(TLRPC.TL_messages_createChat req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray participantIds = new JSONArray();
+                for (TLRPC.InputUser u : req.users) {
+                    String mongoId = userMongoIdByTlId.get(u.user_id);
+                    if (mongoId != null) {
+                        participantIds.put(mongoId);
+                    }
+                }
+                JSONObject body = new JSONObject();
+                body.put("type", "group");
+                body.put("name", req.title);
+                body.put("participants", participantIds);
+                JSONObject conv = request("POST", "/conversations/group", body, true);
+
+                String convId = conv.getString("_id");
+                long chatTlId = idFromMongoId(convId);
+                conversationIdByChatPeer.put(chatTlId, convId);
+                TLRPC.TL_chat tlChat = buildTLChat(conv, chatTlId);
+
+                TL_update.TL_updateNewMessage joinNotice = new TL_update.TL_updateNewMessage();
+                TLRPC.TL_message sysMsg = new TLRPC.TL_message();
+                sysMsg.id = idFromMongoIdInt32(convId);
+                sysMsg.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
+                TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
+                peer.chat_id = chatTlId;
+                sysMsg.peer_id = peer;
+                sysMsg.dialog_id = -chatTlId;
+                sysMsg.message = "";
+                joinNotice.message = sysMsg;
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.chats.add(tlChat);
+                updates.updates.add(joinNotice);
+                updates.date = sysMsg.date;
+
+                TLRPC.TL_messages_invitedUsers result = new TLRPC.TL_messages_invitedUsers();
+                result.updates = updates;
+                savePeerMap("peerMapChat", conversationIdByChatPeer);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.addChatUser -> POST /conversations/:id/members {userId}
+    // ---------------------------------------------------------------
+    private void handleAddChatUser(TLRPC.TL_messages_addChatUser req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.chat_id);
+                String memberMongoId = userMongoIdByTlId.get(req.user_id.user_id);
+                if (convId == null || memberMongoId == null) {
+                    complete(onComplete, null, restError(404, "Unknown chat or user"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("userId", memberMongoId);
+                request("POST", "/conversations/" + convId + "/members", body, true);
+
+                TLRPC.TL_messages_invitedUsers result = new TLRPC.TL_messages_invitedUsers();
+                result.updates = new TLRPC.TL_updates();
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.deleteChatUser -> DELETE /conversations/:id/members/:userId
+    // ---------------------------------------------------------------
+    private void handleDeleteChatUser(TLRPC.TL_messages_deleteChatUser req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.chat_id);
+                String memberMongoId = userMongoIdByTlId.get(req.user_id.user_id);
+                if (convId == null || memberMongoId == null) {
+                    complete(onComplete, null, restError(404, "Unknown chat or user"));
+                    return;
+                }
+                request("DELETE", "/conversations/" + convId + "/members/" + memberMongoId, null, true);
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.editChatAdmin -> PUT /conversations/:id/admins {userId,isAdmin}
+    // ---------------------------------------------------------------
+    private void handleEditChatAdmin(TLRPC.TL_messages_editChatAdmin req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.chat_id);
+                String memberMongoId = userMongoIdByTlId.get(req.user_id.user_id);
+                if (convId == null || memberMongoId == null) {
+                    complete(onComplete, null, restError(404, "Unknown chat or user"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("userId", memberMongoId);
+                body.put("isAdmin", req.is_admin);
+                request("PUT", "/conversations/" + convId + "/admins", body, true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.editChatTitle -> PUT /conversations/:id {name}
+    // ---------------------------------------------------------------
+    private void handleEditChatTitle(TLRPC.TL_messages_editChatTitle req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.chat_id);
+                if (convId == null) {
+                    complete(onComplete, null, restError(404, "Unknown chat"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("name", req.title);
+                request("PUT", "/conversations/" + convId, body, true);
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.deleteChat -> POST /conversations/:id/leave
+    // ---------------------------------------------------------------
+    private void handleLeaveChat(TLRPC.TL_messages_deleteChat req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.chat_id);
+                if (convId == null) {
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                    return;
+                }
+                request("POST", "/conversations/" + convId + "/leave", new JSONObject(), true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
     }
 
     private TLRPC.TL_error restError(int statusCode, String message) {
