@@ -9,6 +9,7 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.tl.TL_account;
+import org.telegram.tgnet.tl.TL_stars;
 import org.telegram.tgnet.tl.TL_stories;
 import org.telegram.tgnet.tl.TL_update;
 
@@ -331,6 +332,14 @@ public class RestBridge {
             }
             if (request instanceof TL_account.setPrivacy) {
                 handleSetPrivacy((TL_account.setPrivacy) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getSponsoredMessages) {
+                handleGetSponsoredMessages((TLRPC.TL_messages_getSponsoredMessages) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stars.getSavedStarGifts) {
+                handleGetSavedStarGifts((TL_stars.getSavedStarGifts) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_help_getCountriesList) {
@@ -1485,6 +1494,118 @@ public class RestBridge {
 
                 TL_account.privacyRules result = new TL_account.privacyRules();
                 result.rules.add(privacyRuleForValue(value));
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.getSponsoredMessages -> GET /ads/public (renders as the
+    // "sponsored" promo banner Telegram's own chat list/chat UI already has)
+    // ---------------------------------------------------------------
+    private void handleGetSponsoredMessages(TLRPC.TL_messages_getSponsoredMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray ads = requestArray("GET", "/ads/public", null, false);
+                TLRPC.TL_messages_sponsoredMessages result = new TLRPC.TL_messages_sponsoredMessages();
+                for (int i = 0; i < ads.length(); i++) {
+                    JSONObject ad = ads.getJSONObject(i);
+                    if (!ad.optBoolean("isActive", true)) continue;
+
+                    TLRPC.TL_sponsoredMessage msg = new TLRPC.TL_sponsoredMessage();
+                    msg.random_id = ad.getString("_id").getBytes(StandardCharsets.UTF_8);
+                    msg.url = ad.optString("link", "https://7eve9craft.ir");
+                    msg.title = ad.optString("title", "");
+                    msg.message = ad.optString("description", "");
+                    msg.button_text = "Learn More";
+
+                    String imageUrl = ad.optString("imageUrl", null);
+                    if (imageUrl != null && imageUrl.length() > 0) {
+                        msg.photo = buildPhotoMedia(absoluteUrl(imageUrl)).photo;
+                        msg.flags |= TLObject.FLAG_6; // photo present
+                    }
+
+                    result.messages.add(msg);
+                }
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // stars.getSavedStarGifts -> GET /gifts/user/:id (profile gift shelf)
+    // ---------------------------------------------------------------
+    private void handleGetSavedStarGifts(TL_stars.getSavedStarGifts req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                boolean self = req.peer instanceof TLRPC.TL_inputPeerSelf
+                        || (selfMongoId != null && req.peer.user_id == idFromMongoId(selfMongoId));
+                String userMongoId = self ? selfMongoId : userMongoIdByTlId.get(req.peer.user_id);
+                if (userMongoId == null) {
+                    complete(onComplete, new TL_stars.TL_payments_savedStarGifts(), null);
+                    return;
+                }
+
+                JSONArray gifts = requestArray("GET", "/gifts/user/" + userMongoId, null, true);
+                TL_stars.TL_payments_savedStarGifts result = new TL_stars.TL_payments_savedStarGifts();
+                for (int i = 0; i < gifts.length(); i++) {
+                    JSONObject g = gifts.getJSONObject(i);
+                    if (!g.optBoolean("isVisibleInProfile", true)) continue;
+
+                    String pictureUrl = g.optString("thumbnailUrl", null);
+                    if (pictureUrl == null || pictureUrl.isEmpty()) {
+                        pictureUrl = g.optString("animationUrl", null);
+                    }
+                    if (pictureUrl == null || pictureUrl.isEmpty()) {
+                        continue; // no visual for this gift - skip rather than render broken
+                    }
+
+                    TL_stars.TL_starGift starGift = new TL_stars.TL_starGift();
+                    starGift.id = idFromMongoId(g.getString("_id"));
+                    starGift.sticker = buildDocumentMedia(absoluteUrl(pictureUrl), "image/webp", null, "sticker").document;
+                    try {
+                        starGift.stars = Long.parseLong(g.optString("displayValue", "0").replaceAll("[^0-9]", ""));
+                    } catch (NumberFormatException ignore) {
+                        starGift.stars = 0;
+                    }
+                    starGift.convert_stars = starGift.stars;
+                    String title = g.optString("name", null);
+                    if (title != null && !title.isEmpty()) {
+                        starGift.title = title;
+                        starGift.flags |= TLObject.FLAG_5; // title present
+                    }
+
+                    TL_stars.TL_savedStarGift saved = new TL_stars.TL_savedStarGift();
+                    saved.gift = starGift;
+                    saved.date = parseIsoToEpochSeconds(g.optString("createdAt", null));
+
+                    boolean anonymous = g.optBoolean("isAnonymous", false);
+                    JSONObject sender = g.optJSONObject("sender");
+                    if (!anonymous && sender != null && sender.has("_id")) {
+                        TLRPC.TL_peerUser fromPeer = new TLRPC.TL_peerUser();
+                        fromPeer.user_id = idFromMongoId(sender.getString("_id"));
+                        saved.from_id = fromPeer;
+                        saved.flags |= 2; // from_id present (raw bit 2 per TL_savedStarGift.readParams)
+                        result.users.add(buildTLUser(sender, sender.getString("_id").equals(selfMongoId)));
+                    }
+
+                    String caption = g.optString("caption", null);
+                    if (caption != null && !caption.isEmpty()) {
+                        TLRPC.TL_textWithEntities text = new TLRPC.TL_textWithEntities();
+                        text.text = caption;
+                        saved.message = text;
+                        saved.flags |= 4; // message present (raw bit 4)
+                    }
+
+                    result.gifts.add(saved);
+                }
+                result.count = result.gifts.size();
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
