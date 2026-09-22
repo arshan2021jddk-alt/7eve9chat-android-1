@@ -145,6 +145,31 @@ public class RestBridge {
         return authToken;
     }
 
+    public String getSelfMongoId() {
+        return selfMongoId;
+    }
+
+    // Reverse lookup for SocketBridge: given a conversation's Mongo id (as
+    // carried in realtime Socket.IO payloads), find the TL peer the UI
+    // already knows this conversation as (populated by handleGetDialogs).
+    TLRPC.Peer resolvePeerForConversationId(String conversationId) {
+        for (Map.Entry<Long, String> e : conversationIdByUserPeer.entrySet()) {
+            if (e.getValue().equals(conversationId)) {
+                TLRPC.TL_peerUser p = new TLRPC.TL_peerUser();
+                p.user_id = e.getKey();
+                return p;
+            }
+        }
+        for (Map.Entry<Long, String> e : conversationIdByChatPeer.entrySet()) {
+            if (e.getValue().equals(conversationId)) {
+                TLRPC.TL_peerChat p = new TLRPC.TL_peerChat();
+                p.chat_id = e.getKey();
+                return p;
+            }
+        }
+        return null;
+    }
+
     public void setAuthToken(String token) {
         authToken = token;
         prefs().edit().putString("jwt", token).apply();
@@ -161,6 +186,19 @@ public class RestBridge {
         prefs().edit().putString("selfMongoId", id).apply();
     }
 
+    // Connecting from RestBridge's own constructor would deadlock/recurse
+    // (SocketBridge.connect() calls back into RestBridge.getInstance(), which
+    // is still null mid-construction) - so this is called lazily instead,
+    // once from the first real request and once right after login.
+    private volatile boolean socketConnectAttempted = false;
+
+    private void maybeConnectSocket() {
+        if (!socketConnectAttempted && authToken != null && selfMongoId != null) {
+            socketConnectAttempted = true;
+            SocketBridge.getInstance(currentAccount).connect();
+        }
+    }
+
     /**
      * Entry point called from ConnectionsManager. ALWAYS returns true: this
      * app must never fall through to real MTProto/native networking, since
@@ -171,6 +209,7 @@ public class RestBridge {
      * "REST_BRIDGE_UNIMPLEMENTED").
      */
     public boolean tryHandle(TLObject request, RequestDelegate onComplete) {
+        maybeConnectSocket();
         try {
             if (request instanceof TLRPC.TL_auth_sendCode) {
                 handleSendCode((TLRPC.TL_auth_sendCode) request, onComplete);
@@ -214,6 +253,10 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_messages_getSavedGifs) {
                 handleGetSavedGifs((TLRPC.TL_messages_getSavedGifs) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_help_getCountriesList) {
+                handleGetCountriesList((TLRPC.TL_help_getCountriesList) request, onComplete);
                 return true;
             }
         } catch (Exception e) {
@@ -285,6 +328,7 @@ public class RestBridge {
 
                 TLRPC.TL_auth_authorization auth = new TLRPC.TL_auth_authorization();
                 auth.user = user;
+                maybeConnectSocket();
                 complete(onComplete, auth, null);
             } catch (RestException e) {
                 complete(onComplete, null, mapSignInError(e));
@@ -598,6 +642,31 @@ public class RestBridge {
         });
     }
 
+    // ---------------------------------------------------------------
+    // help.getCountriesList -> synthetic, Iran-only (this deployment only
+    // serves Iranian phone numbers, so the country picker only ever offers
+    // Iran and the phone field only ever expects a 10-digit Iranian mobile
+    // number after +98).
+    // ---------------------------------------------------------------
+    private void handleGetCountriesList(TLRPC.TL_help_getCountriesList req, RequestDelegate onComplete) {
+        TLRPC.TL_help_countriesList result = new TLRPC.TL_help_countriesList();
+
+        TLRPC.TL_help_country iran = new TLRPC.TL_help_country();
+        iran.iso2 = "IR";
+        iran.default_name = "Iran";
+        iran.name = "Iran";
+        iran.flags |= TLObject.FLAG_1; // name present
+
+        TLRPC.TL_help_countryCode code = new TLRPC.TL_help_countryCode();
+        code.country_code = "98";
+        code.patterns.add("XXX XXX XXXX");
+        code.flags |= TLObject.FLAG_1; // patterns present
+        iran.country_codes.add(code);
+
+        result.countries.add(iran);
+        complete(onComplete, result, null);
+    }
+
     private TL_stories.TL_storyItem buildStoryItem(JSONObject story, boolean out) throws Exception {
         TL_stories.TL_storyItem item = new TL_stories.TL_storyItem();
         item.id = idFromMongoIdInt32(story.getString("_id"));
@@ -723,7 +792,7 @@ public class RestBridge {
     // JSON -> TLRPC.TL_message (text messages only for now; media types are
     // shown as a bracketed placeholder until MessageMedia mapping is added)
     // ---------------------------------------------------------------
-    private TLRPC.TL_message buildTLMessage(JSONObject m, TLRPC.Peer peer) throws Exception {
+    TLRPC.TL_message buildTLMessage(JSONObject m, TLRPC.Peer peer) throws Exception {
         TLRPC.TL_message msg = new TLRPC.TL_message();
         msg.id = idFromMongoIdInt32(m.getString("_id"));
         msg.date = parseIsoToEpochSeconds(m.optString("createdAt", null));
@@ -861,7 +930,7 @@ public class RestBridge {
         return id;
     }
 
-    private String absoluteUrl(String maybeRelative) {
+    String absoluteUrl(String maybeRelative) {
         if (maybeRelative.startsWith("http://") || maybeRelative.startsWith("https://")) {
             return maybeRelative;
         }

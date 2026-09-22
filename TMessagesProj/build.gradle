@@ -37,6 +37,11 @@ configurations.all {
 }
 
 dependencies {
+    // 7eve9chat: realtime bridge to the custom backend (see RestBridge/SocketBridge)
+    implementation('io.socket:socket.io-client:2.1.1') {
+        exclude group: 'org.json', module: 'json'
+    }
+
     implementation 'androidx.core:core:1.16.0'
     implementation 'androidx.palette:palette:1.0.0'
     implementation 'androidx.exifinterface:exifinterface:1.3.6'
