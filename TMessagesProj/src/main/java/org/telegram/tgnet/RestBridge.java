@@ -309,6 +309,22 @@ public class RestBridge {
                 handleLeaveChat((TLRPC.TL_messages_deleteChat) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_channels_createChannel) {
+                handleCreateChannel((TLRPC.TL_channels_createChannel) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_joinChannel) {
+                handleJoinChannel((TLRPC.TL_channels_joinChannel) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_leaveChannel) {
+                handleLeaveChannel((TLRPC.TL_channels_leaveChannel) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_editTitle) {
+                handleEditChannelTitle((TLRPC.TL_channels_editTitle) request, onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_help_getCountriesList) {
                 handleGetCountriesList((TLRPC.TL_help_getCountriesList) request, onComplete);
                 return true;
@@ -489,6 +505,17 @@ public class RestBridge {
                         peer.user_id = tlUser.id;
                         dialog.peer = peer;
                         dialog.id = tlUser.id;
+                    } else if ("channel".equals(convType)) {
+                        long channelTlId = idFromMongoId(convId);
+                        conversationIdByChatPeer.put(channelTlId, convId);
+
+                        TLRPC.TL_channel tlChannel = buildTLChannel(conv, channelTlId);
+                        result.chats.add(tlChannel);
+
+                        TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
+                        peer.channel_id = channelTlId;
+                        dialog.peer = peer;
+                        dialog.id = -channelTlId;
                     } else {
                         long chatTlId = idFromMongoId(convId);
                         conversationIdByChatPeer.put(chatTlId, convId);
@@ -1284,6 +1311,103 @@ public class RestBridge {
         });
     }
 
+    // ---------------------------------------------------------------
+    // channels.createChannel -> POST /conversations/group {type:'channel'}
+    // ---------------------------------------------------------------
+    private void handleCreateChannel(TLRPC.TL_channels_createChannel req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("type", "channel");
+                body.put("name", req.title);
+                if (req.about != null) {
+                    body.put("description", req.about);
+                }
+                JSONObject conv = request("POST", "/conversations/group", body, true);
+
+                String convId = conv.getString("_id");
+                long channelTlId = idFromMongoId(convId);
+                conversationIdByChatPeer.put(channelTlId, convId);
+                TLRPC.TL_channel tlChannel = buildTLChannel(conv, channelTlId);
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.chats.add(tlChannel);
+                updates.date = tlChannel.date;
+
+                savePeerMap("peerMapChat", conversationIdByChatPeer);
+                complete(onComplete, updates, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // channels.joinChannel -> POST /conversations/:id/join
+    // ---------------------------------------------------------------
+    private void handleJoinChannel(TLRPC.TL_channels_joinChannel req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                if (convId == null) {
+                    complete(onComplete, null, restError(404, "Unknown channel"));
+                    return;
+                }
+                request("POST", "/conversations/" + convId + "/join", new JSONObject(), true);
+
+                TLRPC.TL_chatInviteJoinResultOk result = new TLRPC.TL_chatInviteJoinResultOk();
+                result.updates = new TLRPC.TL_updates();
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // channels.leaveChannel -> POST /conversations/:id/leave
+    // ---------------------------------------------------------------
+    private void handleLeaveChannel(TLRPC.TL_channels_leaveChannel req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                if (convId == null) {
+                    complete(onComplete, new TLRPC.TL_updates(), null);
+                    return;
+                }
+                request("POST", "/conversations/" + convId + "/leave", new JSONObject(), true);
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // channels.editTitle -> PUT /conversations/:id {name}
+    // ---------------------------------------------------------------
+    private void handleEditChannelTitle(TLRPC.TL_channels_editTitle req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                if (convId == null) {
+                    complete(onComplete, null, restError(404, "Unknown channel"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("name", req.title);
+                request("PUT", "/conversations/" + convId, body, true);
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
     private TLRPC.TL_error restError(int statusCode, String message) {
         TLRPC.TL_error error = new TLRPC.TL_error();
         error.code = statusCode;
@@ -1607,6 +1731,41 @@ public class RestBridge {
         chat.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
         chat.version = 1;
         return chat;
+    }
+
+    // Channels (broadcast) and supergroups both use TL_channel in real
+    // Telegram; this backend only has a flat "channel" type (no distinct
+    // supergroup), so megagroup stays false - it always renders as a
+    // broadcast channel.
+    private TLRPC.TL_channel buildTLChannel(JSONObject conv, long channelTlId) {
+        TLRPC.TL_channel channel = new TLRPC.TL_channel();
+        channel.id = channelTlId;
+        channel.access_hash = 1;
+        channel.flags |= TLObject.FLAG_13; // access_hash present
+        channel.title = conv.optString("name", "Channel");
+        channel.photo = new TLRPC.TL_chatPhotoEmpty();
+        channel.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
+        channel.broadcast = true;
+        channel.megagroup = false;
+
+        String handle = conv.optString("handle", null);
+        if (handle != null && handle.length() > 0) {
+            channel.username = handle;
+            channel.flags |= TLObject.FLAG_6; // username present
+        }
+
+        JSONArray participants = conv.optJSONArray("participants");
+        if (participants != null) {
+            channel.participants_count = participants.length();
+            channel.flags |= TLObject.FLAG_17; // participants_count present
+        }
+
+        String ownerId = conv.optString("owner", null);
+        if (ownerId != null && ownerId.equals(selfMongoId)) {
+            channel.creator = true;
+        }
+
+        return channel;
     }
 
     // Last 7 hex chars (28 bits) of the Mongo ObjectId -> stable, always
