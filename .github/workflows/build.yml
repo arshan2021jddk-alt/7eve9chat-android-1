@@ -5,6 +5,10 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+  issues: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,27 +40,7 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tail -c 55000 build.log > tail.log || echo "no log" > tail.log
-          python3 - <<'PYEOF'
-          import json, os, urllib.request
-          body = open("tail.log", "r", errors="replace").read()
-          payload = json.dumps({
-              "title": f"Build failed - run {os.environ['GITHUB_RUN_ID']}",
-              "body": "```\n" + body + "\n```"
-          }).encode()
-          req = urllib.request.Request(
-              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues",
-              data=payload,
-              headers={
-                  "Authorization": f"token {os.environ['GH_TOKEN']}",
-                  "Accept": "application/vnd.github+json",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-          print(urllib.request.urlopen(req).read().decode())
-          PYEOF
+        run: python3 .github/scripts/report_failure.py
 
       - name: Publish APK as a GitHub Release asset (artifact storage isn't reachable from this network)
         if: success()
