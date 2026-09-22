@@ -325,6 +325,14 @@ public class RestBridge {
                 handleEditChannelTitle((TLRPC.TL_channels_editTitle) request, onComplete);
                 return true;
             }
+            if (request instanceof TL_account.getPrivacy) {
+                handleGetPrivacy((TL_account.getPrivacy) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.setPrivacy) {
+                handleSetPrivacy((TL_account.setPrivacy) request, onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_help_getCountriesList) {
                 handleGetCountriesList((TLRPC.TL_help_getCountriesList) request, onComplete);
                 return true;
@@ -1401,6 +1409,83 @@ public class RestBridge {
                 body.put("name", req.title);
                 request("PUT", "/conversations/" + convId, body, true);
                 complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // account.getPrivacy / account.setPrivacy -> the 4 backend
+    // privacySettings fields plus the 2 we added (profilePhoto, calls).
+    // This backend stores one simple "Everyone/My Contacts/Nobody" value
+    // per category rather than full allow/disallow user lists, so each
+    // TL privacy rule list here is always a single rule.
+    // ---------------------------------------------------------------
+    private String backendPrivacyField(TLRPC.InputPrivacyKey key) {
+        if (key instanceof TLRPC.TL_inputPrivacyKeyStatusTimestamp) return "lastSeen";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyPhoneNumber) return "phoneNumber";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyForwards) return "forwardedMessages";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyChatInvite) return "groupsAndChannels";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyProfilePhoto) return "profilePhoto";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyPhoneCall) return "calls";
+        return null;
+    }
+
+    private TLRPC.PrivacyRule privacyRuleForValue(String value) {
+        if ("Nobody".equals(value)) {
+            return new TLRPC.TL_privacyValueDisallowAll();
+        } else if ("My Contacts".equals(value)) {
+            return new TLRPC.TL_privacyValueAllowContacts();
+        }
+        return new TLRPC.TL_privacyValueAllowAll();
+    }
+
+    private String valueForPrivacyRules(ArrayList<TLRPC.InputPrivacyRule> rules) {
+        if (rules.isEmpty()) return "Everyone";
+        TLRPC.InputPrivacyRule first = rules.get(0);
+        if (first instanceof TLRPC.TL_inputPrivacyValueDisallowAll) return "Nobody";
+        if (first instanceof TLRPC.TL_inputPrivacyValueAllowContacts) return "My Contacts";
+        return "Everyone";
+    }
+
+    private void handleGetPrivacy(TL_account.getPrivacy req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String field = backendPrivacyField(req.key);
+                JSONObject me = request("GET", "/auth/me", null, true);
+                JSONObject privacy = me.optJSONObject("privacySettings");
+                String value = privacy != null && field != null ? privacy.optString(field, "Everyone") : "Everyone";
+
+                TL_account.privacyRules result = new TL_account.privacyRules();
+                result.rules.add(privacyRuleForValue(value));
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void handleSetPrivacy(TL_account.setPrivacy req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String field = backendPrivacyField(req.key);
+                if (field == null) {
+                    complete(onComplete, new TL_account.privacyRules(), null);
+                    return;
+                }
+                String value = valueForPrivacyRules(req.rules);
+                JSONObject privacySettings = new JSONObject();
+                privacySettings.put(field, value);
+                JSONObject body = new JSONObject();
+                body.put("privacySettings", privacySettings);
+                request("PUT", "/auth/profile", body, true);
+
+                TL_account.privacyRules result = new TL_account.privacyRules();
+                result.rules.add(privacyRuleForValue(value));
+                complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
