@@ -2049,6 +2049,9 @@ public class RestBridge {
         user.self = self;
         user.contact = true;
         user.verified = u.optBoolean("isVerified", false);
+        user.scam = u.optBoolean("isScam", false);
+        user.fake = u.optBoolean("isFake", false);
+        user.premium = u.optBoolean("isPremium", false);
 
         String avatar = u.optString("avatar", null);
         if (avatar != null && avatar.length() > 0) {
