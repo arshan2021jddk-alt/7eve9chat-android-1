@@ -8,7 +8,9 @@ import org.json.JSONObject;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
+import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_stories;
+import org.telegram.tgnet.tl.TL_update;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -102,6 +104,21 @@ public class RestBridge {
     // to the right backend page. Not persisted: resets on process restart,
     // which just means the next scroll-up re-starts from the newest page.
     private final HashMap<String, Integer> historyLoadedCount = new HashMap<>();
+
+    // TL_authorization.hash -> backend deviceId, so resetAuthorization (the
+    // "terminate session" button) knows which device to remove.
+    private final HashMap<Long, String> sessionHashToDeviceId = new HashMap<>();
+
+    // TL numeric user id -> Mongo user id, populated every time buildTLUser()
+    // constructs a user, so anything that only has the TL id (e.g. opening a
+    // full profile from a chat) can still call backend endpoints keyed by
+    // Mongo id.
+    private final HashMap<Long, String> userMongoIdByTlId = new HashMap<>();
+
+    // TL int32 message id -> Mongo message id. idFromMongoIdInt32() is a
+    // one-way hash (last 28 bits of the ObjectId), so edit/delete/react need
+    // this map (populated by buildTLMessage()) to recover the real id.
+    private final HashMap<Integer, String> messageMongoIdByTlId = new HashMap<>();
 
     private RestBridge(int account) {
         currentAccount = account;
@@ -259,6 +276,34 @@ public class RestBridge {
                 handleGetCountriesList((TLRPC.TL_help_getCountriesList) request, onComplete);
                 return true;
             }
+            if (request instanceof TL_account.getAuthorizations) {
+                handleGetAuthorizations((TL_account.getAuthorizations) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.resetAuthorization) {
+                handleResetAuthorization((TL_account.resetAuthorization) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_users_getFullUser) {
+                handleGetFullUser((TLRPC.TL_users_getFullUser) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editMessage) {
+                handleEditMessage((TLRPC.TL_messages_editMessage) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteMessages) {
+                handleDeleteMessages((TLRPC.TL_messages_deleteMessages) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendReaction) {
+                handleSendReaction((TLRPC.TL_messages_sendReaction) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_forwardMessages) {
+                handleForwardMessages((TLRPC.TL_messages_forwardMessages) request, onComplete);
+                return true;
+            }
         } catch (Exception e) {
             FileLog.e(e);
             complete(onComplete, null, genericError(e));
@@ -317,6 +362,10 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("phone", phone);
                 body.put("code", req.phone_code);
+                body.put("deviceModel", android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
+                body.put("deviceId", android.provider.Settings.Secure.getString(
+                        ApplicationLoader.applicationContext.getContentResolver(),
+                        android.provider.Settings.Secure.ANDROID_ID));
                 JSONObject resp = request("POST", "/auth/verify-otp", body, false);
 
                 String token = resp.getString("token");
@@ -667,6 +716,254 @@ public class RestBridge {
         complete(onComplete, result, null);
     }
 
+    // ---------------------------------------------------------------
+    // account.getAuthorizations -> GET /auth/sessions ("Devices" screen)
+    // account.resetAuthorization -> DELETE /auth/sessions/:deviceId
+    // ---------------------------------------------------------------
+    private void handleGetAuthorizations(TL_account.getAuthorizations req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray devices = requestArray("GET", "/auth/sessions", null, true);
+                TL_account.authorizations result = new TL_account.authorizations();
+                result.authorization_ttl_days = 180;
+
+                for (int i = 0; i < devices.length(); i++) {
+                    JSONObject d = devices.getJSONObject(i);
+                    String deviceId = d.optString("deviceId", "");
+                    long hash = idForUrl("session:" + deviceId); // reuse the same stable-hash helper
+                    sessionHashToDeviceId.put(hash, deviceId);
+
+                    TLRPC.TL_authorization auth = new TLRPC.TL_authorization();
+                    auth.hash = hash;
+                    auth.device_model = d.optString("deviceName", "Unknown device");
+                    auth.platform = "Android";
+                    auth.system_version = "";
+                    auth.api_id = 0;
+                    auth.app_name = "7eve9Chat";
+                    auth.app_version = "";
+                    auth.date_created = parseIsoToEpochSeconds(d.optString("lastActive", null));
+                    auth.date_active = parseIsoToEpochSeconds(d.optString("lastActive", null));
+                    auth.ip = d.optString("ip", "");
+                    auth.country = "";
+                    auth.region = "";
+                    auth.current = deviceId.equals(currentDeviceId());
+                    result.authorizations.add(auth);
+                }
+
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void handleResetAuthorization(TL_account.resetAuthorization req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String deviceId = sessionHashToDeviceId.get(req.hash);
+                if (deviceId != null) {
+                    request("DELETE", "/auth/sessions/" + deviceId, null, true);
+                }
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // users.getFullUser -> GET /auth/me or /auth/users/:id (profile modal:
+    // bio/about, plus whatever's in the base user - avatar, username, phone).
+    // ---------------------------------------------------------------
+    private void handleGetFullUser(TLRPC.TL_users_getFullUser req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                boolean self = req.id instanceof TLRPC.TL_inputUserSelf
+                        || (selfMongoId != null && req.id.user_id == idFromMongoId(selfMongoId));
+                JSONObject userJson;
+                if (self) {
+                    userJson = request("GET", "/auth/me", null, true);
+                } else {
+                    // idFromMongoId() is one-way, so resolving a full profile for a
+                    // user we only know by TL id relies on userMongoIdByTlId, which
+                    // buildTLUser() populates every time it constructs a user -
+                    // meaning the user must have shown up in a dialog/contacts/etc.
+                    // fetch already, which is always true for "view full profile"
+                    // opened from the UI.
+                    String resolvedId = userMongoIdByTlId.get(req.id.user_id);
+                    if (resolvedId == null) {
+                        complete(onComplete, null, restError(404, "Unknown user"));
+                        return;
+                    }
+                    userJson = request("GET", "/auth/users/" + resolvedId, null, true);
+                }
+
+                TLRPC.TL_userFull full = new TLRPC.TL_userFull();
+                full.id = idFromMongoId(userJson.getString("_id"));
+                String about = userJson.optString("about", null);
+                if (about != null && about.length() > 0) {
+                    full.about = about;
+                    full.flags |= TLObject.FLAG_1; // about present
+                }
+                full.settings = new TLRPC.TL_peerSettings();
+                full.notify_settings = new TLRPC.TL_peerNotifySettings();
+                full.common_chats_count = 0;
+
+                TLRPC.TL_users_userFull result = new TLRPC.TL_users_userFull();
+                result.full_user = full;
+                result.users.add(buildTLUser(userJson, self));
+
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.editMessage -> PUT /messages/:id
+    // ---------------------------------------------------------------
+    private void handleEditMessage(TLRPC.TL_messages_editMessage req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String mongoId = messageMongoIdByTlId.get(req.id);
+                if (mongoId == null) {
+                    complete(onComplete, null, restError(404, "Unknown message"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("text", req.message);
+                JSONObject edited = request("PUT", "/messages/" + mongoId, body, true);
+
+                TLRPC.Peer peer = req.peer instanceof TLRPC.TL_inputPeerUser
+                        ? peerUserFromInput((TLRPC.TL_inputPeerUser) req.peer)
+                        : peerChatFromInput(req.peer);
+                TLRPC.TL_message tlMessage = buildTLMessage(edited, peer);
+                TL_update.TL_updateEditMessage update = new TL_update.TL_updateEditMessage();
+                update.message = tlMessage;
+                update.pts = 0;
+                update.pts_count = 0;
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(update);
+                updates.date = tlMessage.date;
+                complete(onComplete, updates, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.deleteMessages -> DELETE /messages/:id (one call per id)
+    // ---------------------------------------------------------------
+    private void handleDeleteMessages(TLRPC.TL_messages_deleteMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                for (int tlId : req.id) {
+                    String mongoId = messageMongoIdByTlId.get(tlId);
+                    if (mongoId != null) {
+                        try {
+                            request("DELETE", "/messages/" + mongoId, null, true);
+                        } catch (Exception inner) {
+                            FileLog.e(inner);
+                        }
+                    }
+                }
+                TLRPC.TL_messages_affectedMessages result = new TLRPC.TL_messages_affectedMessages();
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.sendReaction -> POST /messages/:id/react
+    // ---------------------------------------------------------------
+    private void handleSendReaction(TLRPC.TL_messages_sendReaction req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String mongoId = messageMongoIdByTlId.get(req.msg_id);
+                if (mongoId == null) {
+                    complete(onComplete, null, restError(404, "Unknown message"));
+                    return;
+                }
+                if (!req.reaction.isEmpty() && req.reaction.get(0) instanceof TLRPC.TL_reactionEmoji) {
+                    String emoji = ((TLRPC.TL_reactionEmoji) req.reaction.get(0)).emoticon;
+                    JSONObject body = new JSONObject();
+                    body.put("emoji", emoji);
+                    request("POST", "/messages/" + mongoId + "/react", body, true);
+                }
+                // Removing a reaction (empty list) isn't distinguishable from
+                // "react with nothing" on this backend's toggle endpoint - the
+                // UI already updates optimistically, so this is a known gap
+                // rather than a crash risk.
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.forwardMessages -> POST /messages/forward (one call per id)
+    // ---------------------------------------------------------------
+    private void handleForwardMessages(TLRPC.TL_messages_forwardMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String toConversationId = resolveConversationId(req.to_peer);
+                if (toConversationId == null) {
+                    complete(onComplete, null, restError(404, "Unknown destination conversation"));
+                    return;
+                }
+                TLRPC.Peer destPeer = req.to_peer instanceof TLRPC.TL_inputPeerUser
+                        ? peerUserFromInput((TLRPC.TL_inputPeerUser) req.to_peer)
+                        : peerChatFromInput(req.to_peer);
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                for (int tlId : req.id) {
+                    String messageMongoId = messageMongoIdByTlId.get(tlId);
+                    if (messageMongoId == null) {
+                        continue;
+                    }
+                    JSONObject body = new JSONObject();
+                    body.put("conversationId", toConversationId);
+                    body.put("messageId", messageMongoId);
+                    JSONObject forwarded = request("POST", "/messages/forward", body, true);
+
+                    TLRPC.TL_message tlMessage = buildTLMessage(forwarded, destPeer);
+                    TL_update.TL_updateNewMessage update = new TL_update.TL_updateNewMessage();
+                    update.message = tlMessage;
+                    update.pts = 0;
+                    update.pts_count = 0;
+                    updates.updates.add(update);
+                    updates.date = tlMessage.date;
+                }
+                complete(onComplete, updates, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private String currentDeviceId() {
+        try {
+            return android.provider.Settings.Secure.getString(
+                    ApplicationLoader.applicationContext.getContentResolver(),
+                    android.provider.Settings.Secure.ANDROID_ID);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private TL_stories.TL_storyItem buildStoryItem(JSONObject story, boolean out) throws Exception {
         TL_stories.TL_storyItem item = new TL_stories.TL_storyItem();
         item.id = idFromMongoIdInt32(story.getString("_id"));
@@ -794,7 +1091,9 @@ public class RestBridge {
     // ---------------------------------------------------------------
     TLRPC.TL_message buildTLMessage(JSONObject m, TLRPC.Peer peer) throws Exception {
         TLRPC.TL_message msg = new TLRPC.TL_message();
-        msg.id = idFromMongoIdInt32(m.getString("_id"));
+        String mongoMessageId = m.getString("_id");
+        msg.id = idFromMongoIdInt32(mongoMessageId);
+        messageMongoIdByTlId.put(msg.id, mongoMessageId);
         msg.date = parseIsoToEpochSeconds(m.optString("createdAt", null));
         msg.peer_id = peer;
         if (peer.user_id != 0) {
@@ -1057,6 +1356,7 @@ public class RestBridge {
         TLRPC.TL_user user = new TLRPC.TL_user();
         String mongoId = u.getString("_id");
         user.id = idFromMongoId(mongoId);
+        userMongoIdByTlId.put(user.id, mongoId);
 
         user.access_hash = 1L;
         user.flags |= TLObject.FLAG_0; // access_hash present
