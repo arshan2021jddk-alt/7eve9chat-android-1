@@ -8,6 +8,7 @@ import org.json.JSONObject;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
+import org.telegram.tgnet.tl.TL_stories;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -34,11 +35,22 @@ import java.util.concurrent.Executors;
  * which calls tryHandle() before ever touching native/MTProto.
  *
  * Implemented so far: auth.sendCode, auth.signIn, messages.getDialogs
- * (first page only), messages.getHistory (most recent page only).
+ * (first page only), messages.getHistory (most recent page only),
+ * messages.sendMessage (text only), contacts.getContacts,
+ * messages.readHistory, upload.getFile (ranged HTTPS fetch - powers photo/
+ * video/file rendering in messages and stories), stories.getAllStories,
+ * stories.getPeerStories.
+ *
  * Everything else still needs its own translation added over time (this is
  * a large, incremental migration, not a drop-in swap) - unmapped requests
  * fail fast with a REST_BRIDGE_UNIMPLEMENTED error instead of silently
  * reaching native code.
+ *
+ * Known gaps: pagination (dialogs/history only ever return the first/most
+ * recent page), media size/duration/dimensions are placeholders (backend
+ * doesn't report them), group/channel admin features, calls, gifts, games,
+ * explore/posts, stickers/gifs pickers, and avatars (UserProfilePhoto uses a
+ * different FileLocation scheme not yet wired) are unmapped.
  */
 public class RestBridge {
 
@@ -77,12 +89,17 @@ public class RestBridge {
     private final HashMap<Long, String> conversationIdByUserPeer = new HashMap<>();
     private final HashMap<Long, String> conversationIdByChatPeer = new HashMap<>();
 
+    // TL photo/document ids -> the backend URL they actually point to, so
+    // upload.getFile can serve real bytes for chat media, avatars and stories.
+    private final HashMap<Long, String> mediaUrlById = new HashMap<>();
+
     private RestBridge(int account) {
         currentAccount = account;
         authToken = prefs().getString("jwt", null);
         selfMongoId = prefs().getString("selfMongoId", null);
         loadPeerMap(prefs().getString("peerMapUser", null), conversationIdByUserPeer);
         loadPeerMap(prefs().getString("peerMapChat", null), conversationIdByChatPeer);
+        loadPeerMap(prefs().getString("mediaMap", null), mediaUrlById);
     }
 
     private static void loadPeerMap(String json, HashMap<Long, String> target) {
@@ -159,6 +176,30 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_messages_getHistory) {
                 handleGetHistory((TLRPC.TL_messages_getHistory) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendMessage) {
+                handleSendMessage((TLRPC.TL_messages_sendMessage) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_contacts_getContacts) {
+                handleGetContacts((TLRPC.TL_contacts_getContacts) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_readHistory) {
+                handleReadHistory((TLRPC.TL_messages_readHistory) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_upload_getFile) {
+                handleGetFile((TLRPC.TL_upload_getFile) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_getAllStories) {
+                handleGetAllStories((TL_stories.TL_stories_getAllStories) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_getPeerStories) {
+                handleGetPeerStories((TL_stories.TL_stories_getPeerStories) request, onComplete);
                 return true;
             }
         } catch (Exception e) {
@@ -337,6 +378,226 @@ public class RestBridge {
         });
     }
 
+    // ---------------------------------------------------------------
+    // messages.sendMessage -> POST /messages
+    // ---------------------------------------------------------------
+    private void handleSendMessage(TLRPC.TL_messages_sendMessage req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String conversationId = resolveConversationId(req.peer);
+                if (conversationId == null) {
+                    complete(onComplete, null, restError(404, "Conversation not found - open the dialogs list first"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("conversationId", conversationId);
+                body.put("text", req.message);
+                body.put("type", "text");
+                JSONObject sent = request("POST", "/messages", body, true);
+
+                TLRPC.TL_updateShortSentMessage update = new TLRPC.TL_updateShortSentMessage();
+                update.id = idFromMongoIdInt32(sent.getString("_id"));
+                update.date = parseIsoToEpochSeconds(sent.optString("createdAt", null));
+                update.out = true;
+                update.entities = new ArrayList<>();
+                update.pts = 0;
+                update.pts_count = 0;
+                update.flags = 0;
+                complete(onComplete, update, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // contacts.getContacts -> GET /auth/contacts
+    // ---------------------------------------------------------------
+    private void handleGetContacts(TLRPC.TL_contacts_getContacts req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray contacts = requestArray("GET", "/auth/contacts", null, true);
+                TLRPC.TL_contacts_contacts result = new TLRPC.TL_contacts_contacts();
+                for (int i = 0; i < contacts.length(); i++) {
+                    JSONObject c = contacts.getJSONObject(i);
+                    TLRPC.TL_user tlUser = buildTLUser(c, false);
+                    result.users.add(tlUser);
+
+                    TLRPC.TL_contact contact = new TLRPC.TL_contact();
+                    contact.user_id = tlUser.id;
+                    contact.mutual = true;
+                    result.contacts.add(contact);
+                }
+                result.saved_count = result.contacts.size();
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.readHistory -> POST /messages/conversations/:id/read
+    // ---------------------------------------------------------------
+    private void handleReadHistory(TLRPC.TL_messages_readHistory req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String conversationId = resolveConversationId(req.peer);
+                TLRPC.TL_messages_affectedMessages result = new TLRPC.TL_messages_affectedMessages();
+                if (conversationId == null) {
+                    complete(onComplete, result, null);
+                    return;
+                }
+                request("POST", "/messages/conversations/" + conversationId + "/read", new JSONObject(), true);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                // Read receipts are best-effort - never surface this as a hard error.
+                complete(onComplete, new TLRPC.TL_messages_affectedMessages(), null);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // stories.getAllStories -> GET /stories (friends') + GET /stories/me (own)
+    // ---------------------------------------------------------------
+    private void handleGetAllStories(TL_stories.TL_stories_getAllStories req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                TL_stories.TL_stories_allStories result = new TL_stories.TL_stories_allStories();
+                result.state = "1";
+                result.stealth_mode = new TL_stories.TL_storiesStealthMode();
+
+                JSONArray myStories = requestArray("GET", "/stories/me", null, true);
+                if (myStories.length() > 0 && selfMongoId != null) {
+                    JSONObject selfUserJson = request("GET", "/auth/me", null, true);
+                    addUserOnce(result.users, buildTLUser(selfUserJson, true));
+
+                    TL_stories.TL_peerStories mine = new TL_stories.TL_peerStories();
+                    TLRPC.TL_peerUser selfPeer = new TLRPC.TL_peerUser();
+                    selfPeer.user_id = idFromMongoId(selfMongoId);
+                    mine.peer = selfPeer;
+                    for (int i = 0; i < myStories.length(); i++) {
+                        mine.stories.add(buildStoryItem(myStories.getJSONObject(i), true));
+                    }
+                    result.peer_stories.add(mine);
+                }
+
+                JSONArray groups = requestArray("GET", "/stories", null, true);
+                for (int i = 0; i < groups.length(); i++) {
+                    JSONObject group = groups.getJSONObject(i);
+                    JSONObject userJson = group.getJSONObject("user");
+                    TLRPC.TL_user tlUser = buildTLUser(userJson, false);
+                    addUserOnce(result.users, tlUser);
+
+                    TL_stories.TL_peerStories peerStories = new TL_stories.TL_peerStories();
+                    TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                    peer.user_id = tlUser.id;
+                    peerStories.peer = peer;
+                    JSONArray stories = group.getJSONArray("stories");
+                    for (int s = 0; s < stories.length(); s++) {
+                        peerStories.stories.add(buildStoryItem(stories.getJSONObject(s), false));
+                    }
+                    result.peer_stories.add(peerStories);
+                }
+                result.count = result.peer_stories.size();
+
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // stories.getPeerStories -> GET /stories/me (self) or GET /stories (others)
+    // ---------------------------------------------------------------
+    private void handleGetPeerStories(TL_stories.TL_stories_getPeerStories req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                long peerUserId = req.peer != null ? req.peer.user_id : 0;
+                TL_stories.TL_stories_peerStories result = new TL_stories.TL_stories_peerStories();
+                TL_stories.TL_peerStories peerStories = new TL_stories.TL_peerStories();
+                TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                peer.user_id = peerUserId;
+                peerStories.peer = peer;
+                result.stories = peerStories;
+
+                boolean isSelf = selfMongoId != null && peerUserId == idFromMongoId(selfMongoId);
+                if (isSelf) {
+                    JSONArray myStories = requestArray("GET", "/stories/me", null, true);
+                    for (int i = 0; i < myStories.length(); i++) {
+                        peerStories.stories.add(buildStoryItem(myStories.getJSONObject(i), true));
+                    }
+                } else {
+                    JSONArray groups = requestArray("GET", "/stories", null, true);
+                    for (int i = 0; i < groups.length(); i++) {
+                        JSONObject group = groups.getJSONObject(i);
+                        JSONObject userJson = group.getJSONObject("user");
+                        if (idFromMongoId(userJson.getString("_id")) != peerUserId) {
+                            continue;
+                        }
+                        result.users.add(buildTLUser(userJson, false));
+                        JSONArray stories = group.getJSONArray("stories");
+                        for (int s = 0; s < stories.length(); s++) {
+                            peerStories.stories.add(buildStoryItem(stories.getJSONObject(s), false));
+                        }
+                        break;
+                    }
+                }
+
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private TL_stories.TL_storyItem buildStoryItem(JSONObject story, boolean out) throws Exception {
+        TL_stories.TL_storyItem item = new TL_stories.TL_storyItem();
+        item.id = idFromMongoIdInt32(story.getString("_id"));
+        item.date = parseIsoToEpochSeconds(story.optString("createdAt", null));
+        item.expire_date = parseIsoToEpochSeconds(story.optString("expiresAt", null));
+        item.out = out;
+
+        String mediaUrl = absoluteUrl(story.getString("mediaUrl"));
+        if ("video".equals(story.optString("mediaType", "image"))) {
+            item.media = buildDocumentMedia(mediaUrl, "video/mp4", null, "video");
+        } else {
+            item.media = buildPhotoMedia(mediaUrl);
+        }
+
+        String caption = story.optString("caption", null);
+        if (caption != null && caption.length() > 0) {
+            item.caption = caption;
+            item.flags |= TLObject.FLAG_0; // caption present (raw bit 1 in TL_storyItem.readParams)
+        }
+
+        JSONArray viewers = story.optJSONArray("viewers");
+        if (viewers != null) {
+            TL_stories.TL_storyViews views = new TL_stories.TL_storyViews();
+            views.views_count = viewers.length();
+            item.views = views;
+            item.flags |= 8; // views present (bit not covered by a named FLAG_ constant here)
+        }
+
+        return item;
+    }
+
+    private TLRPC.TL_error restError(int statusCode, String message) {
+        TLRPC.TL_error error = new TLRPC.TL_error();
+        error.code = statusCode;
+        error.text = "REQUEST_FAILED:" + message;
+        return error;
+    }
+
     private static void addUserOnce(ArrayList<TLRPC.User> users, TLRPC.User user) {
         for (int i = 0; i < users.size(); i++) {
             if (users.get(i).id == user.id) return;
@@ -436,9 +697,46 @@ public class RestBridge {
 
         String type = m.optString("type", "text");
         String text = m.optString("text", "");
-        if ("text".equals(type) || text.length() > 0) {
-            msg.message = text;
-        } else {
+        msg.message = text;
+
+        String fileUrl = m.optString("fileUrl", null);
+        if (fileUrl != null && fileUrl.length() > 0) {
+            String fullUrl = absoluteUrl(fileUrl);
+            String fileName = m.optString("fileName", null);
+            switch (type) {
+                case "image":
+                    msg.media = buildPhotoMedia(fullUrl);
+                    msg.flags |= TLObject.FLAG_9; // media present
+                    break;
+                case "video":
+                    msg.media = buildDocumentMedia(fullUrl, "video/mp4", fileName, "video");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+                case "voice":
+                    msg.media = buildDocumentMedia(fullUrl, "audio/ogg", fileName, "voice");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+                case "audio":
+                    msg.media = buildDocumentMedia(fullUrl, "audio/mpeg", fileName, "audio");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+                case "gif":
+                    msg.media = buildDocumentMedia(fullUrl, "video/mp4", fileName, "gif");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+                case "sticker":
+                    msg.media = buildDocumentMedia(fullUrl, "image/webp", fileName, "sticker");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+                default:
+                    msg.media = buildDocumentMedia(fullUrl, "application/octet-stream", fileName, "file");
+                    msg.flags |= TLObject.FLAG_9;
+                    break;
+            }
+            if (msg.message.isEmpty()) {
+                msg.message = "";
+            }
+        } else if (!"text".equals(type) && text.isEmpty()) {
             msg.message = "[" + type + "]";
         }
 
@@ -453,6 +751,144 @@ public class RestBridge {
         }
 
         return msg;
+    }
+
+    // ---------------------------------------------------------------
+    // upload.getFile -> ranged HTTPS GET against the backend's static file
+    // server (Express's static middleware supports Range requests, so this
+    // also covers video streaming and large-file chunked downloads).
+    // ---------------------------------------------------------------
+    private void handleGetFile(TLRPC.TL_upload_getFile req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                long id = req.location != null ? req.location.id : 0;
+                String url = mediaUrlById.get(id);
+                if (url == null) {
+                    complete(onComplete, null, restError(404, "Unknown file reference"));
+                    return;
+                }
+
+                URL u = new URL(url);
+                HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                try {
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(30000);
+                    long start = req.offset;
+                    long end = req.offset + req.limit - 1;
+                    conn.setRequestProperty("Range", "bytes=" + start + "-" + end);
+
+                    int code = conn.getResponseCode();
+                    if (code != 200 && code != 206) {
+                        complete(onComplete, null, restError(code, "File fetch failed"));
+                        return;
+                    }
+                    byte[] data = readAll(conn.getInputStream());
+
+                    TLRPC.TL_upload_file file = new TLRPC.TL_upload_file();
+                    file.type = new TLRPC.TL_storage_fileUnknown();
+                    file.mtime = (int) (System.currentTimeMillis() / 1000L);
+                    NativeByteBuffer buf = new NativeByteBuffer(data.length);
+                    buf.writeBytes(data);
+                    buf.rewind();
+                    file.bytes = buf;
+                    complete(onComplete, file, null);
+                } finally {
+                    conn.disconnect();
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Stable positive id for a media URL, so upload.getFile can later map the
+    // id the UI asks for back to the actual URL. Persisted (see savePeerMap
+    // calls) so it survives process restarts.
+    private long idForUrl(String url) {
+        long hash = 1125899906842597L; // FNV-ish seed
+        for (int i = 0; i < url.length(); i++) {
+            hash = 31 * hash + url.charAt(i);
+        }
+        long id = hash & 0x0FFFFFFFFFFFFFFFL;
+        mediaUrlById.put(id, url);
+        return id;
+    }
+
+    private String absoluteUrl(String maybeRelative) {
+        if (maybeRelative.startsWith("http://") || maybeRelative.startsWith("https://")) {
+            return maybeRelative;
+        }
+        if (!maybeRelative.startsWith("/")) {
+            maybeRelative = "/" + maybeRelative;
+        }
+        return "https://7eve9craft.ir" + maybeRelative;
+    }
+
+    private TLRPC.TL_messageMediaPhoto buildPhotoMedia(String url) {
+        TLRPC.TL_photo photo = new TLRPC.TL_photo();
+        photo.id = idForUrl(url);
+        photo.access_hash = 0;
+        photo.file_reference = new byte[0];
+        photo.date = (int) (System.currentTimeMillis() / 1000L);
+        photo.dc_id = 1;
+
+        TLRPC.TL_photoSize size = new TLRPC.TL_photoSize();
+        size.type = "x";
+        size.w = 1280;
+        size.h = 1280;
+        size.size = 0; // unknown ahead of download; harmless placeholder
+        photo.sizes.add(size);
+
+        TLRPC.TL_messageMediaPhoto media = new TLRPC.TL_messageMediaPhoto();
+        media.photo = photo;
+        media.flags |= TLObject.FLAG_0; // photo present
+        return media;
+    }
+
+    private TLRPC.TL_messageMediaDocument buildDocumentMedia(String url, String mimeType, String fileName, String kind) {
+        TLRPC.TL_document document = new TLRPC.TL_document();
+        document.id = idForUrl(url);
+        document.access_hash = 0;
+        document.file_reference = new byte[0];
+        document.date = (int) (System.currentTimeMillis() / 1000L);
+        document.mime_type = mimeType;
+        document.size = 0; // unknown ahead of download; harmless placeholder
+        document.dc_id = 1;
+
+        if (fileName == null || fileName.isEmpty()) {
+            fileName = "file";
+        }
+        TLRPC.TL_documentAttributeFilename nameAttr = new TLRPC.TL_documentAttributeFilename();
+        nameAttr.file_name = fileName;
+        document.attributes.add(nameAttr);
+
+        if ("video".equals(kind) || "gif".equals(kind)) {
+            TLRPC.TL_documentAttributeVideo videoAttr = new TLRPC.TL_documentAttributeVideo();
+            videoAttr.supports_streaming = true;
+            videoAttr.duration = 0;
+            videoAttr.w = 1280;
+            videoAttr.h = 720;
+            document.attributes.add(videoAttr);
+        } else if ("audio".equals(kind) || "voice".equals(kind)) {
+            TLRPC.TL_documentAttributeAudio audioAttr = new TLRPC.TL_documentAttributeAudio();
+            audioAttr.voice = "voice".equals(kind);
+            audioAttr.duration = 0;
+            document.attributes.add(audioAttr);
+        }
+
+        TLRPC.TL_messageMediaDocument media = new TLRPC.TL_messageMediaDocument();
+        media.document = document;
+        media.flags |= TLObject.FLAG_0; // document present
+        media.video = "video".equals(kind) || "gif".equals(kind);
+        if (media.video) {
+            media.flags |= TLObject.FLAG_6;
+        }
+        if ("voice".equals(kind)) {
+            media.voice = true;
+            media.flags |= TLObject.FLAG_8;
+        }
+        return media;
     }
 
     // ---------------------------------------------------------------
