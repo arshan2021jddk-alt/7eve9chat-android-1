@@ -128,6 +128,7 @@ public class RestBridge {
     // Channel (broadcast) TL ids, so realtime events for them are routed as
     // channel peers rather than basic-group peers.
     private final java.util.Set<Long> channelTlIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    private final java.util.Set<String> viewOnceMessages = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     private final java.util.concurrent.ConcurrentHashMap<Long, String> documentKindById = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<Integer, String> gameShortNameByMsg = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Set<Long> broadcastTlIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
@@ -757,6 +758,29 @@ public class RestBridge {
                 handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_help_getPeerColors) {
+                complete(onComplete, buildPeerColors(false), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_help_getPeerProfileColors) {
+                complete(onComplete, buildPeerColors(true), null);
+                return true;
+            }
+            if (request instanceof TL_account.updateColor) {
+                TL_account.updateColor req = (TL_account.updateColor) request;
+                boolean hasColor = req.color != null && (req.color.flags & TLObject.FLAG_0) != 0;
+                handleUpdateColor(null, req.for_profile, hasColor ? req.color.color : -1, req.color != null ? req.color.background_emoji_id : 0, hasColor, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_updateColor) {
+                TLRPC.TL_channels_updateColor req = (TLRPC.TL_channels_updateColor) request;
+                handleUpdateColor(conversationIdByChatPeer.get(req.channel.channel_id), req.for_profile, req.color, req.background_emoji_id, (req.flags & 4) != 0, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_premium_getBoostsStatus) {
+                handleBoostsStatus((TL_stories.TL_premium_getBoostsStatus) request, onComplete);
+                return true;
+            }
             if (request instanceof TL_account.sendChangePhoneCode) {
                 handleSendChangePhoneCode((TL_account.sendChangePhoneCode) request, onComplete);
                 return true;
@@ -892,12 +916,44 @@ public class RestBridge {
                 complete(onComplete, new TLRPC.TL_chatOnlines(), null);
                 return true;
             }
-            if (request instanceof TLRPC.TL_channels_readMessageContents) {
-                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            if (request instanceof TLRPC.TL_messages_readMessageContents || request instanceof TLRPC.TL_channels_readMessageContents) {
+                ArrayList<Integer> ids = request instanceof TLRPC.TL_messages_readMessageContents
+                        ? ((TLRPC.TL_messages_readMessageContents) request).id
+                        : ((TLRPC.TL_channels_readMessageContents) request).id;
+                executor.execute(() -> {
+                    for (Integer id : ids) {
+                        String mongoId = messageMongoIdByTlId.get(id);
+                        if (mongoId != null && viewOnceMessages.remove(mongoId)) {
+                            try {
+                                // View-once media was opened: the backend deletes it.
+                                request("POST", "/messages/" + mongoId + "/view_once", new JSONObject(), true);
+                            } catch (Exception e) {
+                                FileLog.e(e);
+                            }
+                        }
+                    }
+                });
+                complete(onComplete, request instanceof TLRPC.TL_channels_readMessageContents ? new TLRPC.TL_boolTrue() : new TLRPC.TL_messages_affectedMessages(), null);
                 return true;
             }
-            if (request instanceof TLRPC.TL_messages_readMessageContents) {
-                complete(onComplete, new TLRPC.TL_messages_affectedMessages(), null);
+            if (request instanceof TLRPC.TL_messages_setHistoryTTL) {
+                TLRPC.TL_messages_setHistoryTTL req = (TLRPC.TL_messages_setHistoryTTL) request;
+                String convId = resolveConversationId(req.peer);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(400, "PEER_ID_INVALID"));
+                    return true;
+                }
+                JSONObject body = new JSONObject();
+                body.put("period", req.period);
+                executor.execute(() -> {
+                    try {
+                        request("PUT", "/conversations/" + convId + "/ttl", body, true);
+                        complete(onComplete, new TLRPC.TL_updates(), null);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                        complete(onComplete, null, genericError(e));
+                    }
+                });
                 return true;
             }
             if (request instanceof TLRPC.TL_channels_getAdminedPublicChannels) {
@@ -1429,12 +1485,21 @@ public class RestBridge {
                 file = assembleUpload(req.file);
                 String mime = guessMime(req.file.name, "image/jpeg");
                 JSONObject userJson = requestMultipart("PUT", "/auth/profile", null, "file", file, "avatar" + extensionForMime(mime), mime);
+                if (req.video != null) {
+                    // Animated profile picture (Telegram sends the still frame + an mp4)
+                    java.io.File video = assembleUpload(req.video);
+                    try {
+                        userJson = requestMultipart("POST", "/auth/profile-video", null, "file", video, "avatar.mp4", "video/mp4");
+                    } finally {
+                        video.delete();
+                    }
+                }
 
                 TLRPC.TL_user self = buildTLUser(userJson, true);
                 TLRPC.TL_photos_photo result = new TLRPC.TL_photos_photo();
                 String avatar = userJson.optString("avatar", null);
                 if (avatar != null && avatar.length() > 0) {
-                    result.photo = buildPhotoMedia(absoluteUrl(avatar)).photo;
+                    result.photo = buildProfilePhoto(avatar, jsonStr(userJson, "avatarVideo"));
                 } else {
                     result.photo = new TLRPC.TL_photoEmpty();
                 }
@@ -2609,6 +2674,21 @@ public class RestBridge {
     }
 
     private JSONObject sendOneMedia(TLRPC.InputPeer peer, TLRPC.InputMedia media, String caption, TLRPC.InputReplyTo replyTo) throws Exception {
+        return sendOneMedia(peer, media, caption, replyTo, null);
+    }
+
+    private void putMediaOptions(JSONObject body, TLRPC.InputMedia media, ArrayList<TLRPC.MessageEntity> captionEntities) throws Exception {
+        if (media.spoiler) body.put("hasSpoiler", true);
+        if (media.ttl_seconds == 0x7FFFFFFF) {
+            body.put("selfDestructTimer", "view_once");
+        } else if (media.ttl_seconds > 0) {
+            body.put("selfDestructTimer", String.valueOf(media.ttl_seconds));
+        }
+        JSONArray formatting = entitiesToJson(captionEntities);
+        if (formatting.length() > 0) body.put("entities", formatting.toString());
+    }
+
+    private JSONObject sendOneMedia(TLRPC.InputPeer peer, TLRPC.InputMedia media, String caption, TLRPC.InputReplyTo replyTo, ArrayList<TLRPC.MessageEntity> captionEntities) throws Exception {
         if (media instanceof TLRPC.TL_inputMediaDocument && ((TLRPC.TL_inputMediaDocument) media).id != null) {
             // Existing file (saved GIF, sticker, forward-like re-send): the
             // backend reuses it via existingFileUrl, no upload needed.
@@ -2629,6 +2709,7 @@ public class RestBridge {
             }
             body.put("type", kind);
             body.put("existingFileUrl", path);
+            putMediaOptions(body, media, captionEntities);
             if (caption != null && !caption.isEmpty()) {
                 body.put("text", caption);
             }
@@ -2716,6 +2797,7 @@ public class RestBridge {
                 fields.put("text", caption);
             }
             putReplyTo(fields, replyTo);
+            putMediaOptions(fields, media, captionEntities);
             JSONObject meta = new JSONObject();
             for (TLRPC.DocumentAttribute attr : media.attributes) {
                 if (attr instanceof TLRPC.TL_documentAttributeAudio) {
@@ -2743,7 +2825,7 @@ public class RestBridge {
     private void handleSendMedia(TLRPC.TL_messages_sendMedia req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
-                JSONObject sent = sendOneMedia(req.peer, req.media, req.message, req.reply_to);
+                JSONObject sent = sendOneMedia(req.peer, req.media, req.message, req.reply_to, req.entities);
                 TLRPC.TL_message tlMessage = buildTLMessage(sent, peerFromInput(req.peer));
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 updates.updates.add(newMessageUpdateFor(tlMessage));
@@ -2765,7 +2847,7 @@ public class RestBridge {
                 TLRPC.Peer peer = peerFromInput(req.peer);
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 for (TLRPC.TL_inputSingleMedia single : req.multi_media) {
-                    JSONObject sent = sendOneMedia(req.peer, single.media, single.message, req.reply_to);
+                    JSONObject sent = sendOneMedia(req.peer, single.media, single.message, req.reply_to, single.entities);
                     TLRPC.TL_message tlMessage = buildTLMessage(sent, peer);
 
                     TL_update.TL_updateMessageID idUpdate = new TL_update.TL_updateMessageID();
@@ -2974,6 +3056,8 @@ public class RestBridge {
                 }
                 body.put("text", req.message);
                 body.put("type", "text");
+                JSONArray formatting = entitiesToJson(req.entities);
+                if (formatting.length() > 0) body.put("entities", formatting);
                 putReplyTo(body, req.reply_to);
                 JSONObject sent = request("POST", "/messages", body, true);
                 rememberConversation(req.peer, sent);
@@ -3294,7 +3378,7 @@ public class RestBridge {
 
                 String avatar = userJson.optString("avatar", "");
                 if (!avatar.isEmpty() && !"null".equals(avatar) && !avatar.startsWith("data:")) {
-                    full.profile_photo = buildPhotoMedia(absoluteUrl(avatar)).photo;
+                    full.profile_photo = buildProfilePhoto(avatar, jsonStr(userJson, "avatarVideo"));
                     full.flags |= TLObject.FLAG_2;
                 }
 
@@ -3656,6 +3740,110 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             }
         });
+    }
+
+    // ---------------------------------------------------------------
+    // Appearance: name / profile colors. Available to Premium users and
+    // verified (blue tick) channels & groups; the backend enforces it.
+    // ---------------------------------------------------------------
+    private static final int[][] NAME_COLORS = {
+            {0xE17076}, {0xFAA74A}, {0xA695E7}, {0x7BC862}, {0x6EC9CB}, {0x65AADD}, {0xEE7AAE},
+            {0xE15052, 0xF9AE63}, {0xE0802B, 0xFAC534}, {0xA05FF3, 0xF48FFF}, {0x27A910, 0xA7DC57},
+            {0x27ACCE, 0x82E8D6}, {0x3391D4, 0x7DD3F0}, {0xDD4371, 0xFFBE9F}, {0x10B981, 0x6EE7B7},
+    };
+    private static final int[][][] PROFILE_COLORS = {
+            // palette, background gradient, story ring
+            {{0xBA5650}, {0xC9565D, 0xD97C57}, {0xCF7244, 0xCC9433}},
+            {{0xC27C3E}, {0xCF7244, 0xCC9433}, {0xD58E3B, 0xE4B43A}},
+            {{0x956AC8}, {0x9662D4, 0xB966B6}, {0x9B66DC, 0xC766AB}},
+            {{0x49A355}, {0x3D9755, 0x89A650}, {0x3FAB64, 0x9BB553}},
+            {{0x3E97AD}, {0x3D95BA, 0x50AD98}, {0x3AA4C4, 0x5DBF9C}},
+            {{0x5A8FBB}, {0x538BC2, 0x4DA8BD}, {0x5494D4, 0x52B5CB}},
+            {{0xB85378}, {0xB04F74, 0xD1666D}, {0xC05D83, 0xE07A6E}},
+            {{0x10B981}, {0x0E9F6E, 0x34D399}, {0x10B981, 0x6EE7B7}},
+    };
+
+    private TLRPC.TL_help_peerColors buildPeerColors(boolean profile) {
+        TLRPC.TL_help_peerColors result = new TLRPC.TL_help_peerColors();
+        result.hash = profile ? 7902 : 7901;
+        int count = profile ? PROFILE_COLORS.length : NAME_COLORS.length;
+        for (int id = 0; id < count; id++) {
+            TLRPC.TL_help_peerColorOption option = new TLRPC.TL_help_peerColorOption();
+            option.color_id = id;
+            if (profile) {
+                TLRPC.TL_help_peerColorProfileSet set = new TLRPC.TL_help_peerColorProfileSet();
+                for (int c : PROFILE_COLORS[id][0]) set.palette_colors.add(c);
+                for (int c : PROFILE_COLORS[id][1]) set.bg_colors.add(c);
+                for (int c : PROFILE_COLORS[id][2]) set.story_colors.add(c);
+                option.colors = set;
+                option.dark_colors = set;
+            } else {
+                TLRPC.TL_help_peerColorSet set = new TLRPC.TL_help_peerColorSet();
+                for (int c : NAME_COLORS[id]) set.colors.add(c);
+                option.colors = set;
+                option.dark_colors = set;
+            }
+            option.channel_min_level = 0;
+            option.group_min_level = 0;
+            option.flags |= TLObject.FLAG_1 | TLObject.FLAG_2 | TLObject.FLAG_3 | TLObject.FLAG_4;
+            result.colors.add(option);
+        }
+        return result;
+    }
+
+    private void handleUpdateColor(String conversationId, boolean forProfile, int color, long backgroundEmojiId, boolean hasColor, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("forProfile", forProfile);
+                body.put("color", hasColor ? color : -1);
+                if (backgroundEmojiId != 0) body.put("backgroundEmojiId", Long.toString(backgroundEmojiId));
+                if (conversationId != null) {
+                    request("PUT", "/conversations/" + conversationId + "/appearance", body, true);
+                    complete(onComplete, new TLRPC.TL_updates(), null);
+                } else {
+                    request("PUT", "/auth/appearance", body, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                }
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(403, e.message != null && e.message.contains("PREMIUM") ? "PREMIUM_ACCOUNT_REQUIRED" : "BOOSTS_REQUIRED"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Channel "levels" unlock appearance settings in Telegram's UI; here a
+    // blue tick is what unlocks them.
+    private void handleBoostsStatus(TL_stories.TL_premium_getBoostsStatus req, RequestDelegate onComplete) {
+        TL_stories.TL_premium_boostsStatus status = new TL_stories.TL_premium_boostsStatus();
+        long chatId = req.peer != null ? (req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id) : 0;
+        TLRPC.Chat chat = chatId != 0 ? org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(chatId) : null;
+        boolean unlocked = chat != null && chat.verified;
+        status.level = unlocked ? 10 : 0;
+        status.current_level_boosts = unlocked ? 100 : 0;
+        status.boosts = unlocked ? 100 : 0;
+        status.next_level_boosts = unlocked ? 100 : 1;
+        status.flags |= 1;
+        status.boost_url = "https://7eve9craft.ir";
+        complete(onComplete, status, null);
+    }
+
+    private static TLRPC.PeerColor peerColorFromJson(JSONObject j) {
+        if (j == null || !j.has("color")) return null;
+        TLRPC.TL_peerColor c = new TLRPC.TL_peerColor();
+        c.color = j.optInt("color", 0);
+        c.flags |= TLObject.FLAG_0;
+        String bg = jsonStr(j, "backgroundEmojiId");
+        if (bg != null) {
+            try {
+                c.background_emoji_id = Long.parseLong(bg);
+                c.flags |= TLObject.FLAG_1;
+            } catch (NumberFormatException ignore) {
+            }
+        }
+        return c;
     }
 
     // ---------------------------------------------------------------
@@ -5094,6 +5282,7 @@ public class RestBridge {
         if (text == null) text = "";
         msg.message = text;
         ArrayList<TLRPC.MessageEntity> entities = parseEntities(text);
+        entities.addAll(entitiesFromJson(m.optJSONArray("entities")));
         if (!entities.isEmpty()) {
             msg.entities = entities;
             msg.flags |= TLObject.FLAG_7; // entities present
@@ -5142,6 +5331,25 @@ public class RestBridge {
                 msg.message = "";
             }
             applyMediaInfo(msg.media, m.optLong("fileSize", 0), m.optJSONObject("mediaMeta"));
+            if (m.optBoolean("hasSpoiler", false)) {
+                msg.media.spoiler = true;
+            }
+            Object timer = m.opt("selfDestructTimer");
+            if (timer != null && timer != JSONObject.NULL) {
+                String t = String.valueOf(timer);
+                if ("view_once".equals(t)) {
+                    msg.media.ttl_seconds = 0x7FFFFFFF; // Telegram's "view once"
+                    viewOnceMessages.add(mongoMessageId);
+                } else {
+                    try {
+                        msg.media.ttl_seconds = Integer.parseInt(t);
+                    } catch (NumberFormatException ignore) {
+                    }
+                }
+                if (msg.media.ttl_seconds > 0) {
+                    msg.media.flags |= TLObject.FLAG_2;
+                }
+            }
         } else if (!"text".equals(type) && !"poll".equals(type) && text.isEmpty()) {
             msg.message = "[" + type + "]";
         }
@@ -5238,6 +5446,11 @@ public class RestBridge {
             }
         }
 
+        if (m.optInt("ttlPeriod", 0) > 0) {
+            msg.ttl_period = m.optInt("ttlPeriod", 0);
+            msg.flags |= TLObject.FLAG_25;
+        }
+
         if (m.optBoolean("isEdited", false)) {
             msg.edit_date = parseIsoToEpochSeconds(m.optString("updatedAt", null));
             msg.flags |= TLObject.FLAG_15;
@@ -5297,7 +5510,14 @@ public class RestBridge {
                 } else if (req.location != null) {
                     id = req.location.id;
                 }
-                String url = mediaUrlById.get(id);
+                String url = null;
+                if (req.location instanceof TLRPC.TL_inputPhotoFileLocation
+                        && ("u".equals(req.location.thumb_size) || "v".equals(req.location.thumb_size))) {
+                    url = videoUrlByPhotoId.get(id); // video avatar
+                }
+                if (url == null) {
+                    url = mediaUrlById.get(id);
+                }
                 if (url == null) {
                     complete(onComplete, null, restError(404, "Unknown file reference"));
                     return;
@@ -5370,6 +5590,30 @@ public class RestBridge {
             maybeRelative = "/" + maybeRelative;
         }
         return "https://7eve9craft.ir" + maybeRelative;
+    }
+
+    // Full profile photo; with a video avatar it also carries a "u" video
+    // size, fetched through upload.getFile with thumb_size "u".
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> videoUrlByPhotoId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    TLRPC.Photo buildProfilePhoto(String avatar, String avatarVideo) {
+        TLRPC.Photo photo = buildPhotoMedia(absoluteUrl(avatar)).photo;
+        if (avatarVideo != null && !avatarVideo.isEmpty()) {
+            videoUrlByPhotoId.put(photo.id, absoluteUrl(avatarVideo));
+            TLRPC.TL_videoSize video = new TLRPC.TL_videoSize();
+            video.type = "u";
+            video.w = 800;
+            video.h = 800;
+            video.size = 0;
+            video.video_start_ts = 0;
+            video.location = new TLRPC.TL_fileLocationToBeDeprecated();
+            video.location.volume_id = -photo.id;
+            video.location.local_id = 'u';
+            video.location.dc_id = 1;
+            photo.video_sizes.add(video);
+            photo.flags |= TLObject.FLAG_1; // video_sizes present
+        }
+        return photo;
     }
 
     // Real size (lets the app stream videos / show progress) and the
@@ -5703,11 +5947,28 @@ public class RestBridge {
         }
         if (channel.admin_rights != null) {
             channel.flags |= TLObject.FLAG_14; // admin_rights present
+            if (!channel.verified) {
+                // Stories are for blue-tick groups/channels only.
+                channel.admin_rights.post_stories = false;
+                channel.admin_rights.edit_stories = false;
+                channel.admin_rights.delete_stories = false;
+            }
         }
 
         if (megagroup) {
             channel.default_banned_rights = defaultBannedRights(conv.optJSONObject("defaultPermissions"));
             channel.flags |= TLObject.FLAG_18;
+        }
+
+        TLRPC.PeerColor chatNameColor = peerColorFromJson(conv.optJSONObject("nameColor"));
+        if (chatNameColor != null) {
+            channel.color = chatNameColor;
+            channel.flags2 |= TLObject.FLAG_7;
+        }
+        TLRPC.PeerColor chatProfileColor = peerColorFromJson(conv.optJSONObject("profileTgColor"));
+        if (chatProfileColor != null) {
+            channel.profile_color = chatProfileColor;
+            channel.flags2 |= TLObject.FLAG_8;
         }
 
         JSONObject voiceCall = conv.optJSONObject("voiceCall");
@@ -5875,11 +6136,24 @@ public class RestBridge {
 
         applyUserStatus(user, u, self);
 
+        TLRPC.PeerColor nameColor = peerColorFromJson(u.optJSONObject("nameColor"));
+        if (nameColor != null) {
+            user.color = nameColor;
+            user.flags2 |= TLObject.FLAG_8;
+        }
+        TLRPC.PeerColor profileColor = peerColorFromJson(u.optJSONObject("profileTgColor"));
+        if (profileColor != null) {
+            user.profile_color = profileColor;
+            user.flags2 |= TLObject.FLAG_9;
+        }
+
         String avatar = jsonStr(u, "avatar");
         if (avatar != null && avatar.length() > 0) {
             TLRPC.TL_userProfilePhoto photo = new TLRPC.TL_userProfilePhoto();
             photo.photo_id = idForUrl(absoluteUrl(avatar));
             photo.dc_id = 1;
+            String avatarVideo = jsonStr(u, "avatarVideo");
+            photo.has_video = avatarVideo != null && !avatarVideo.isEmpty();
             photo.photo_small = new TLRPC.TL_fileLocationToBeDeprecated();
             photo.photo_small.volume_id = -photo.photo_id;
             photo.photo_small.local_id = 'a';
@@ -5996,6 +6270,80 @@ public class RestBridge {
             e.length = end - start;
             out.add(e);
         }
+    }
+
+    // Formatting the user typed (bold, spoiler, ...) -> backend JSON.
+    // Auto-detected links/mentions are rebuilt on receipt, so skipped here.
+    JSONArray entitiesToJson(ArrayList<TLRPC.MessageEntity> entities) {
+        JSONArray out = new JSONArray();
+        if (entities == null) return out;
+        for (TLRPC.MessageEntity e : entities) {
+            String type = null;
+            if (e instanceof TLRPC.TL_messageEntityBold) type = "bold";
+            else if (e instanceof TLRPC.TL_messageEntityItalic) type = "italic";
+            else if (e instanceof TLRPC.TL_messageEntityUnderline) type = "underline";
+            else if (e instanceof TLRPC.TL_messageEntityStrike) type = "strike";
+            else if (e instanceof TLRPC.TL_messageEntitySpoiler) type = "spoiler";
+            else if (e instanceof TLRPC.TL_messageEntityCode) type = "code";
+            else if (e instanceof TLRPC.TL_messageEntityPre) type = "pre";
+            else if (e instanceof TLRPC.TL_messageEntityTextUrl) type = "text_url";
+            else if (e instanceof TLRPC.TL_messageEntityBlockquote) type = "blockquote";
+            else if (e instanceof TLRPC.TL_messageEntityCustomEmoji) type = "custom_emoji";
+            if (type == null || e.length <= 0) continue;
+            try {
+                JSONObject j = new JSONObject();
+                j.put("type", type);
+                j.put("offset", e.offset);
+                j.put("length", e.length);
+                if (e.url != null && !e.url.isEmpty()) j.put("url", e.url);
+                if (e.language != null && !e.language.isEmpty()) j.put("language", e.language);
+                if (e instanceof TLRPC.TL_messageEntityCustomEmoji) {
+                    long docId = ((TLRPC.TL_messageEntityCustomEmoji) e).document_id;
+                    j.put("documentId", Long.toString(docId));
+                    String path = relativeUploadPath(mediaUrlById.get(docId));
+                    if (path != null) j.put("documentUrl", path);
+                }
+                out.put(j);
+            } catch (Exception ignore) {
+            }
+        }
+        return out;
+    }
+
+    ArrayList<TLRPC.MessageEntity> entitiesFromJson(JSONArray arr) {
+        ArrayList<TLRPC.MessageEntity> out = new ArrayList<>();
+        for (int i = 0; arr != null && i < arr.length(); i++) {
+            JSONObject j = arr.optJSONObject(i);
+            if (j == null) continue;
+            TLRPC.MessageEntity e;
+            switch (j.optString("type")) {
+                case "bold": e = new TLRPC.TL_messageEntityBold(); break;
+                case "italic": e = new TLRPC.TL_messageEntityItalic(); break;
+                case "underline": e = new TLRPC.TL_messageEntityUnderline(); break;
+                case "strike": e = new TLRPC.TL_messageEntityStrike(); break;
+                case "spoiler": e = new TLRPC.TL_messageEntitySpoiler(); break;
+                case "code": e = new TLRPC.TL_messageEntityCode(); break;
+                case "pre": e = new TLRPC.TL_messageEntityPre(); e.language = j.optString("language", ""); break;
+                case "text_url": e = new TLRPC.TL_messageEntityTextUrl(); e.url = j.optString("url", ""); break;
+                case "blockquote": e = new TLRPC.TL_messageEntityBlockquote(); break;
+                case "custom_emoji": {
+                    TLRPC.TL_messageEntityCustomEmoji ce = new TLRPC.TL_messageEntityCustomEmoji();
+                    String url = jsonStr(j, "documentUrl");
+                    try {
+                        ce.document_id = url != null ? idForUrl(absoluteUrl(url)) : Long.parseLong(j.optString("documentId", "0"));
+                    } catch (NumberFormatException ex) {
+                        continue;
+                    }
+                    e = ce;
+                    break;
+                }
+                default: continue;
+            }
+            e.offset = j.optInt("offset");
+            e.length = j.optInt("length");
+            out.add(e);
+        }
+        return out;
     }
 
     // Fold the 24-hex-char Mongo ObjectId into a positive long usable as a
