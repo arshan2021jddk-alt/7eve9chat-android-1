@@ -122,6 +122,39 @@ public class SocketBridge {
         }
     }
 
+    // Generic access for features that run their own socket protocol
+    // (group voice chats).
+    public void on(String event, io.socket.emitter.Emitter.Listener listener) {
+        Socket s = socket;
+        if (s != null) {
+            s.on(event, listener);
+        }
+    }
+
+    public void off(String event, io.socket.emitter.Emitter.Listener listener) {
+        Socket s = socket;
+        if (s != null) {
+            s.off(event, listener);
+        }
+    }
+
+    public boolean isConnected() {
+        Socket s = socket;
+        return s != null && s.connected();
+    }
+
+    public String socketId() {
+        Socket s = socket;
+        return s != null ? s.id() : null;
+    }
+
+    public void emitAny(String event, Object data) {
+        Socket s = socket;
+        if (s != null && s.connected()) {
+            s.emit(event, data);
+        }
+    }
+
     public void emit(String event, JSONObject data) {
         Socket s = socket;
         if (s != null && s.connected()) {

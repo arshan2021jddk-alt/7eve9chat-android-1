@@ -129,6 +129,12 @@ public class VoIPHelper {
 		if (activity == null) {
 			return;
 		}
+		// 7eve9chat: voice chats run on our own WebRTC mesh (compatible with
+		// the website), not Telegram's group-call servers.
+		org.telegram.ui.GroupVoiceChatActivity.open(activity, accountInstance.getCurrentAccount(), chat);
+		if (true) {
+			return;
+		}
 		if (ConnectionsManager.getInstance(UserConfig.selectedAccount).getConnectionState() != ConnectionsManager.ConnectionStateConnected) {
 			boolean isAirplaneMode = Settings.System.getInt(activity.getContentResolver(), Settings.System.AIRPLANE_MODE_ON, 0) != 0;
 			AlertDialog.Builder bldr = new AlertDialog.Builder(activity)

@@ -1647,6 +1647,7 @@ public class ChatActivity extends BaseFragment implements
     private final static int bot_help = 30;
     private final static int bot_settings = 31;
     private final static int call = 32;
+    private final static int seven_voice_chat = 9797; // 7eve9chat group/channel voice chat
     private final static int video_call = 33;
 
     private final static int attach_photo = 0;
@@ -3972,6 +3973,8 @@ public class ChatActivity extends BaseFragment implements
                     if (!getMessagesController().getTranslateController().toggleTranslatingDialog(getDialogId(), true)) {
                         updateTopPanel(true);
                     }
+                } else if (id == seven_voice_chat) {
+                    GroupVoiceChatActivity.open(getParentActivity(), currentAccount, currentChat);
                 } else if (id == call || id == video_call) {
                     if (currentUser != null && getParentActivity() != null) {
                         VoIPHelper.startCall(currentUser, id == video_call, userInfo != null && userInfo.video_calls_available, getParentActivity(), getMessagesController().getUserFull(currentUser.id), getAccountInstance());
@@ -4398,6 +4401,10 @@ public class ChatActivity extends BaseFragment implements
             if (currentChat != null) {
                 headerItem.lazilyAddSubItem(open_direct, R.drawable.msg_markunread, getString(R.string.ChannelOpenDirect));
                 headerItem.setSubItemShown(open_direct, ChatObject.isChannel(currentChat) && !ChatObject.isMonoForum(currentChat) && currentChat.linked_monoforum_id != 0 && ChatObject.canManageMonoForum(currentAccount, -currentChat.linked_monoforum_id));
+            }
+            if (currentChat != null && ChatObject.isChannel(currentChat) && !isTopic
+                    && (currentChat.megagroup || currentChat.creator || ChatObject.hasAdminRights(currentChat) || currentChat.call_active)) {
+                headerItem.lazilyAddSubItem(seven_voice_chat, R.drawable.msg_voicechat, currentChat.call_active ? "پیوستن به تماس صوتی" : "تماس صوتی");
             }
             if (currentUser != null && chatMode != MODE_SAVED) {
                 headerItem.lazilyAddSubItem(call, R.drawable.msg_callback, LocaleController.getString(R.string.Call));

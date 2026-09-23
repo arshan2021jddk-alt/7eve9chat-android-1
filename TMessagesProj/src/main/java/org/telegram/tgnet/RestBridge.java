@@ -342,6 +342,19 @@ public class RestBridge {
         messageMongoIdByTlId.put(idFromMongoIdInt32(mongoId), mongoId);
     }
 
+    public String getConversationIdForChat(long chatTlId) {
+        return conversationIdByChatPeer.get(chatTlId);
+    }
+
+    public JSONArray fetchIceServers() {
+        try {
+            return requestArray("GET", "/webrtc/ice-servers", null, true);
+        } catch (Exception e) {
+            FileLog.e(e);
+            return new JSONArray();
+        }
+    }
+
     void joinConversationRoom(String conversationId) {
         SocketBridge.getInstance(currentAccount).joinConversation(conversationId);
     }

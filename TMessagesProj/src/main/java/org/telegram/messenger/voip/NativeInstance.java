@@ -198,6 +198,9 @@ public class NativeInstance {
         stopGroupNative();
     }
 
+    // 7eve9chat: initializes WebRTC for the org.webrtc PeerConnection API
+    // (used by GroupVoiceChatActivity).
+    public static native void initPeerConnectionSupport();
     private static native long makeGroupNativeInstance(NativeInstance instance, String persistentStateFilePath, boolean highQuality, long videoCapturer, boolean screencast, boolean noiseSupression, boolean conference);
     private static native long makeNativeInstance(String version, NativeInstance instance, Instance.Config config, String persistentStateFilePath, Instance.Endpoint[] endpoints, Instance.Proxy proxy, int networkType, Instance.EncryptionKey encryptionKey, VideoSink remoteSink, long videoCapturer, float aspectRatio);
     public static native long createVideoCapturer(VideoSink localSink, int type);
