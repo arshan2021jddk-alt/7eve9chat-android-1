@@ -201,6 +201,9 @@ public class SocketBridge {
             }
 
             TLRPC.Message message = rest.buildAnyMessage(m, peer);
+            if (message.mentioned && !message.out) {
+                message.media_unread = true; // counts toward the "@" badge until opened
+            }
             updates.updates.add(RestBridge.newMessageUpdateFor(message));
             updates.date = message.date;
             updates.seq = 0;
