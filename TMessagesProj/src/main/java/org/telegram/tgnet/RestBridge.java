@@ -439,6 +439,60 @@ public class RestBridge {
                 handleForwardMessages((TLRPC.TL_messages_forwardMessages) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_auth_signUp) {
+                handleSignUp((TLRPC.TL_auth_signUp) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_upload_saveFilePart) {
+                TLRPC.TL_upload_saveFilePart part = (TLRPC.TL_upload_saveFilePart) request;
+                handleSaveFilePart(part.file_id, part.file_part, part.bytes, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_upload_saveBigFilePart) {
+                TLRPC.TL_upload_saveBigFilePart part = (TLRPC.TL_upload_saveBigFilePart) request;
+                handleSaveFilePart(part.file_id, part.file_part, part.bytes, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_photos_uploadProfilePhoto) {
+                handleUploadProfilePhoto((TLRPC.TL_photos_uploadProfilePhoto) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.updateProfile) {
+                handleUpdateProfile((TL_account.updateProfile) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.checkUsername) {
+                handleCheckUsername(((TL_account.checkUsername) request).username, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.updateUsername) {
+                handleUpdateUsername(((TL_account.updateUsername) request).username, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_checkUsername) {
+                TLRPC.TL_channels_checkUsername req = (TLRPC.TL_channels_checkUsername) request;
+                handleCheckChannelUsername(req.channel, req.username, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_updateUsername) {
+                TLRPC.TL_channels_updateUsername req = (TLRPC.TL_channels_updateUsername) request;
+                handleUpdateChannelUsername(req.channel.channel_id, req.username, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_editPhoto) {
+                TLRPC.TL_channels_editPhoto req = (TLRPC.TL_channels_editPhoto) request;
+                handleEditConversationPhoto(req.channel.channel_id, req.photo, true, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editChatPhoto) {
+                TLRPC.TL_messages_editChatPhoto req = (TLRPC.TL_messages_editChatPhoto) request;
+                handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_sendStory) {
+                handleSendStory((TL_stories.TL_stories_sendStory) request, onComplete);
+                return true;
+            }
         } catch (Exception e) {
             FileLog.e(e);
             complete(onComplete, null, genericError(e));
@@ -508,6 +562,14 @@ public class RestBridge {
 
                 JSONObject userJson = resp.getJSONObject("user");
                 setSelfMongoId(userJson.getString("_id"));
+
+                // Brand-new account (backend creates it with an empty name):
+                // let the app show its own "enter your name/photo" screen,
+                // which then comes back as auth.signUp below.
+                if (userJson.optString("name", "").trim().isEmpty()) {
+                    complete(onComplete, new TLRPC.TL_auth_authorizationSignUpRequired(), null);
+                    return;
+                }
                 TLRPC.TL_user user = buildTLUser(userJson, true);
 
                 TLRPC.TL_auth_authorization auth = new TLRPC.TL_auth_authorization();
@@ -519,6 +581,418 @@ public class RestBridge {
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // auth.signUp -> PUT /auth/profile {name} (token was already issued
+    // by verify-otp; the account just had no name yet)
+    // ---------------------------------------------------------------
+    private void handleSignUp(TLRPC.TL_auth_signUp req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String name = joinName(req.first_name, req.last_name);
+                if (name.isEmpty()) {
+                    complete(onComplete, null, tlError(400, "FIRSTNAME_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("name", name);
+                JSONObject userJson = request("PUT", "/auth/profile", body, true);
+
+                TLRPC.TL_auth_authorization auth = new TLRPC.TL_auth_authorization();
+                auth.user = buildTLUser(userJson, true);
+                maybeConnectSocket();
+                complete(onComplete, auth, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private static String joinName(String first, String last) {
+        String f = first == null ? "" : first.trim();
+        String l = last == null ? "" : last.trim();
+        return l.isEmpty() ? f : (f + " " + l).trim();
+    }
+
+    // ---------------------------------------------------------------
+    // account.updateProfile -> PUT /auth/profile {name, about}
+    // ---------------------------------------------------------------
+    private void handleUpdateProfile(TL_account.updateProfile req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                if (req.first_name != null || req.last_name != null) {
+                    String name = joinName(req.first_name, req.last_name);
+                    if (!name.isEmpty()) {
+                        body.put("name", name);
+                    }
+                }
+                if (req.about != null) {
+                    // The backend ignores an empty "about", so send a space
+                    // to let the user actually clear their bio.
+                    body.put("about", req.about.isEmpty() ? " " : req.about);
+                }
+                JSONObject userJson = request("PUT", "/auth/profile", body, true);
+                complete(onComplete, buildTLUser(userJson, true), null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // account.checkUsername -> GET /auth/getUserByUsername/:username
+    // (404 = free)
+    // ---------------------------------------------------------------
+    private void handleCheckUsername(String username, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                if (!isValidUsername(username)) {
+                    complete(onComplete, null, tlError(400, "USERNAME_INVALID"));
+                    return;
+                }
+                boolean free;
+                try {
+                    JSONObject existing = request("GET", "/auth/getUserByUsername/" + java.net.URLEncoder.encode(username, "UTF-8"), null, true);
+                    free = existing.optString("_id", "").equals(selfMongoId) || existing.optString("_id", "").isEmpty();
+                } catch (RestException e) {
+                    if (e.statusCode != 404) throw e;
+                    free = true;
+                }
+                complete(onComplete, free ? new TLRPC.TL_boolTrue() : new TLRPC.TL_boolFalse(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // account.updateUsername -> PUT /auth/profile {username}
+    // ---------------------------------------------------------------
+    private void handleUpdateUsername(String username, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                if (username != null && !username.isEmpty() && !isValidUsername(username)) {
+                    complete(onComplete, null, tlError(400, "USERNAME_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("username", username == null ? "" : username);
+                JSONObject userJson = request("PUT", "/auth/profile", body, true);
+                complete(onComplete, buildTLUser(userJson, true), null);
+            } catch (RestException e) {
+                complete(onComplete, null, mapUsernameError(e));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private static boolean isValidUsername(String username) {
+        return username != null && username.matches("^[a-zA-Z][a-zA-Z0-9_]{3,31}$");
+    }
+
+    private TLRPC.TL_error mapUsernameError(RestException e) {
+        TLRPC.TL_error error = new TLRPC.TL_error();
+        error.code = 400;
+        String msg = e.message == null ? "" : e.message.toLowerCase();
+        if (msg.contains("taken")) {
+            error.text = "USERNAME_OCCUPIED";
+        } else if (msg.contains("username") || msg.contains("handle")) {
+            error.text = "USERNAME_INVALID";
+        } else {
+            error.text = "NETWORK_ERROR:" + e.message;
+        }
+        return error;
+    }
+
+    // ---------------------------------------------------------------
+    // channels.checkUsername -> GET /conversations/handle/:handle
+    // ---------------------------------------------------------------
+    private void handleCheckChannelUsername(TLRPC.InputChannel channel, String username, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                if (!isValidUsername(username)) {
+                    complete(onComplete, null, tlError(400, "USERNAME_INVALID"));
+                    return;
+                }
+                String ownConvId = channel != null ? conversationIdByChatPeer.get(channel.channel_id) : null;
+                boolean free;
+                try {
+                    JSONObject existing = request("GET", "/conversations/handle/" + java.net.URLEncoder.encode(username, "UTF-8"), null, true);
+                    String foundId = existing.optString("_id", "");
+                    free = foundId.isEmpty() || foundId.equals(ownConvId);
+                } catch (RestException e) {
+                    if (e.statusCode != 404) throw e;
+                    free = true;
+                }
+                complete(onComplete, free ? new TLRPC.TL_boolTrue() : new TLRPC.TL_boolFalse(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // channels.updateUsername -> PUT /conversations/:id {handle}
+    // ---------------------------------------------------------------
+    private void handleUpdateChannelUsername(long channelTlId, String username, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(channelTlId);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(404, "CHANNEL_INVALID"));
+                    return;
+                }
+                if (username != null && !username.isEmpty() && !isValidUsername(username)) {
+                    complete(onComplete, null, tlError(400, "USERNAME_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("handle", username == null ? "" : username);
+                if (username != null && !username.isEmpty()) {
+                    body.put("isPrivateLink", false);
+                }
+                request("PUT", "/conversations/" + convId, body, true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, mapUsernameError(e));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // File uploads. The app streams a file as upload.saveFilePart /
+    // saveBigFilePart chunks and then references it by file_id from the
+    // request that uses it (profile photo, chat photo, story...). Our
+    // backend takes whole multipart uploads instead, so parts are spooled
+    // to cache here and stitched back together when they're consumed.
+    // ---------------------------------------------------------------
+    private java.io.File uploadDir() {
+        java.io.File dir = new java.io.File(ApplicationLoader.applicationContext.getCacheDir(), "rest_uploads");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    private void handleSaveFilePart(long fileId, int filePart, NativeByteBuffer bytes, RequestDelegate onComplete) {
+        // Copy right away: the uploader recycles this buffer as soon as the
+        // request completes.
+        byte[] data;
+        if (bytes == null || bytes.buffer == null) {
+            data = new byte[0];
+        } else {
+            java.nio.ByteBuffer src = bytes.buffer.duplicate();
+            src.clear();
+            data = new byte[src.remaining()];
+            src.get(data);
+        }
+        executor.execute(() -> {
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(uploadDir(), fileId + "_" + filePart))) {
+                out.write(data);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private java.io.File assembleUpload(TLRPC.InputFile inputFile) throws IOException {
+        if (inputFile == null) {
+            throw new IOException("No file");
+        }
+        java.io.File dir = uploadDir();
+        java.io.File result = new java.io.File(dir, inputFile.id + "_full");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(result)) {
+            byte[] buf = new byte[64 * 1024];
+            for (int p = 0; inputFile.parts <= 0 || p < inputFile.parts; p++) {
+                java.io.File part = new java.io.File(dir, inputFile.id + "_" + p);
+                if (!part.exists()) {
+                    if (inputFile.parts <= 0 && p > 0) {
+                        break;
+                    }
+                    throw new IOException("Missing upload part " + p);
+                }
+                try (java.io.FileInputStream in = new java.io.FileInputStream(part)) {
+                    int r;
+                    while ((r = in.read(buf)) != -1) {
+                        out.write(buf, 0, r);
+                    }
+                }
+                part.delete();
+            }
+        }
+        return result;
+    }
+
+    private static String guessMime(String fileName, String fallback) {
+        String n = fileName == null ? "" : fileName.toLowerCase(Locale.US);
+        if (n.endsWith(".mp4")) return "video/mp4";
+        if (n.endsWith(".webm")) return "video/webm";
+        if (n.endsWith(".png")) return "image/png";
+        if (n.endsWith(".webp")) return "image/webp";
+        if (n.endsWith(".gif")) return "image/gif";
+        if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+        return fallback;
+    }
+
+    private static String extensionForMime(String mime) {
+        if ("video/mp4".equals(mime)) return ".mp4";
+        if ("video/webm".equals(mime)) return ".webm";
+        if ("image/png".equals(mime)) return ".png";
+        if ("image/webp".equals(mime)) return ".webp";
+        if ("image/gif".equals(mime)) return ".gif";
+        if (mime != null && mime.startsWith("video/")) return ".mp4";
+        return ".jpg";
+    }
+
+    // ---------------------------------------------------------------
+    // photos.uploadProfilePhoto -> PUT /auth/profile (multipart "file")
+    // ---------------------------------------------------------------
+    private void handleUploadProfilePhoto(TLRPC.TL_photos_uploadProfilePhoto req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            java.io.File file = null;
+            try {
+                if (req.file == null) {
+                    complete(onComplete, null, tlError(400, "PHOTO_FILE_MISSING"));
+                    return;
+                }
+                file = assembleUpload(req.file);
+                String mime = guessMime(req.file.name, "image/jpeg");
+                JSONObject userJson = requestMultipart("PUT", "/auth/profile", null, "file", file, "avatar" + extensionForMime(mime), mime);
+
+                TLRPC.TL_user self = buildTLUser(userJson, true);
+                TLRPC.TL_photos_photo result = new TLRPC.TL_photos_photo();
+                String avatar = userJson.optString("avatar", null);
+                if (avatar != null && avatar.length() > 0) {
+                    result.photo = buildPhotoMedia(absoluteUrl(avatar)).photo;
+                } else {
+                    result.photo = new TLRPC.TL_photoEmpty();
+                }
+                result.users.add(self);
+                complete(onComplete, result, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            } finally {
+                if (file != null) {
+                    file.delete();
+                }
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // channels.editPhoto / messages.editChatPhoto
+    //   -> PUT /conversations/:id/edit (multipart "avatar")
+    // ---------------------------------------------------------------
+    private void handleEditConversationPhoto(long chatTlId, TLRPC.InputChatPhoto photo, boolean isChannel, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            java.io.File file = null;
+            try {
+                String convId = conversationIdByChatPeer.get(chatTlId);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(404, "CHAT_ID_INVALID"));
+                    return;
+                }
+                JSONObject conv;
+                if (photo instanceof TLRPC.TL_inputChatUploadedPhoto && ((TLRPC.TL_inputChatUploadedPhoto) photo).file != null) {
+                    TLRPC.InputFile inputFile = ((TLRPC.TL_inputChatUploadedPhoto) photo).file;
+                    file = assembleUpload(inputFile);
+                    String mime = guessMime(inputFile.name, "image/jpeg");
+                    conv = requestMultipart("PUT", "/conversations/" + convId + "/edit", null, "avatar", file, "avatar" + extensionForMime(mime), mime);
+                } else {
+                    // inputChatPhotoEmpty (remove photo) or an unsupported
+                    // re-use of an existing photo: clear it.
+                    JSONObject body = new JSONObject();
+                    body.put("avatar", "");
+                    conv = request("PUT", "/conversations/" + convId, body, true);
+                }
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                if (conv.has("_id")) {
+                    updates.chats.add(isChannel ? buildTLChannel(conv, chatTlId) : buildTLChat(conv, chatTlId));
+                }
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            } finally {
+                if (file != null) {
+                    file.delete();
+                }
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // stories.sendStory -> POST /stories (multipart "file" + caption)
+    // ---------------------------------------------------------------
+    private void handleSendStory(TL_stories.TL_stories_sendStory req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            java.io.File file = null;
+            try {
+                TLRPC.InputFile inputFile = null;
+                String mime = "image/jpeg";
+                if (req.media instanceof TLRPC.TL_inputMediaUploadedPhoto) {
+                    inputFile = req.media.file;
+                    mime = guessMime(inputFile != null ? inputFile.name : null, "image/jpeg");
+                } else if (req.media instanceof TLRPC.TL_inputMediaUploadedDocument) {
+                    inputFile = req.media.file;
+                    mime = req.media.mime_type != null && !req.media.mime_type.isEmpty()
+                            ? req.media.mime_type
+                            : guessMime(inputFile != null ? inputFile.name : null, "video/mp4");
+                }
+                if (inputFile == null) {
+                    complete(onComplete, null, tlError(400, "MEDIA_EMPTY"));
+                    return;
+                }
+                file = assembleUpload(inputFile);
+                JSONObject fields = new JSONObject();
+                if (req.caption != null && !req.caption.isEmpty()) {
+                    fields.put("caption", req.caption);
+                }
+                JSONObject story = requestMultipart("POST", "/stories", fields, "file", file, "story" + extensionForMime(mime), mime);
+
+                TLRPC.TL_peerUser selfPeer = new TLRPC.TL_peerUser();
+                selfPeer.user_id = UserConfig.getInstance(currentAccount).getClientUserId();
+                TL_stories.TL_updateStory update = new TL_stories.TL_updateStory();
+                update.peer = selfPeer;
+                update.story = buildStoryItem(story, true);
+
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(update);
+                updates.date = update.story.date;
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            } finally {
+                if (file != null) {
+                    file.delete();
+                }
             }
         });
     }
@@ -1895,7 +2369,7 @@ public class RestBridge {
                 full.id = req.chat_id;
                 full.about = conv.optString("description", "");
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
-                full.chat_photo = new TLRPC.TL_photoEmpty();
+                full.chat_photo = buildFullChatPhoto(conv);
 
                 TLRPC.TL_chatParticipants participants = new TLRPC.TL_chatParticipants();
                 participants.chat_id = req.chat_id;
@@ -1927,7 +2401,9 @@ public class RestBridge {
                 full.id = req.channel.channel_id;
                 full.about = conv.optString("description", "");
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
-                full.chat_photo = new TLRPC.TL_photoEmpty();
+                full.chat_photo = buildFullChatPhoto(conv);
+                full.can_set_username = selfMongoId != null && selfMongoId.equals(refId(conv, "owner"));
+                full.can_view_participants = true;
                 JSONArray participantsJson = conv.optJSONArray("participants");
                 if (participantsJson != null) {
                     full.participants_count = participantsJson.length();
@@ -2166,6 +2642,13 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             }
         });
+    }
+
+    private static TLRPC.TL_error tlError(int code, String text) {
+        TLRPC.TL_error error = new TLRPC.TL_error();
+        error.code = code;
+        error.text = text;
+        return error;
     }
 
     private TLRPC.TL_error restError(int statusCode, String message) {
@@ -2549,12 +3032,86 @@ public class RestBridge {
         TLRPC.TL_chat chat = new TLRPC.TL_chat();
         chat.id = chatTlId;
         chat.title = conv.optString("name", "Group");
-        chat.photo = new TLRPC.TL_chatPhotoEmpty();
+        chat.photo = buildChatPhoto(conv);
         JSONArray participants = conv.optJSONArray("participants");
         chat.participants_count = participants != null ? participants.length() : 0;
         chat.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
         chat.version = 1;
+        if (selfMongoId != null && selfMongoId.equals(refId(conv, "owner"))) {
+            chat.creator = true;
+        } else if (isSelfAdmin(conv)) {
+            chat.admin_rights = fullAdminRights();
+        }
         return chat;
+    }
+
+    // Group/channel avatar -> TL chat photo. photo_small/photo_big must be
+    // filled in by hand (normally readParams() derives them), otherwise
+    // ImageLocation.getForChat() returns null and nothing is ever shown.
+    private TLRPC.ChatPhoto buildChatPhoto(JSONObject conv) {
+        String avatar = conv.optString("avatar", "");
+        if (avatar.isEmpty() || "null".equals(avatar)) {
+            return new TLRPC.TL_chatPhotoEmpty();
+        }
+        TLRPC.TL_chatPhoto photo = new TLRPC.TL_chatPhoto();
+        photo.photo_id = idForUrl(absoluteUrl(avatar));
+        photo.dc_id = 1;
+        photo.photo_small = new TLRPC.TL_fileLocationToBeDeprecated();
+        photo.photo_small.volume_id = -photo.photo_id;
+        photo.photo_small.local_id = 'a';
+        photo.photo_big = new TLRPC.TL_fileLocationToBeDeprecated();
+        photo.photo_big.volume_id = -photo.photo_id;
+        photo.photo_big.local_id = 'c';
+        return photo;
+    }
+
+    private TLRPC.Photo buildFullChatPhoto(JSONObject conv) {
+        String avatar = conv.optString("avatar", "");
+        if (avatar.isEmpty() || "null".equals(avatar)) {
+            return new TLRPC.TL_photoEmpty();
+        }
+        return buildPhotoMedia(absoluteUrl(avatar)).photo;
+    }
+
+    // owner/admins come back either as plain ids or populated objects.
+    private static String refId(JSONObject obj, String key) {
+        Object v = obj.opt(key);
+        if (v instanceof JSONObject) {
+            return ((JSONObject) v).optString("_id", null);
+        }
+        return v == null || v == JSONObject.NULL ? null : v.toString();
+    }
+
+    private boolean isSelfAdmin(JSONObject conv) {
+        JSONArray admins = conv.optJSONArray("admins");
+        if (admins == null || selfMongoId == null) {
+            return false;
+        }
+        for (int i = 0; i < admins.length(); i++) {
+            Object a = admins.opt(i);
+            String id = a instanceof JSONObject ? ((JSONObject) a).optString("_id", null) : String.valueOf(a);
+            if (selfMongoId.equals(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static TLRPC.TL_chatAdminRights fullAdminRights() {
+        TLRPC.TL_chatAdminRights rights = new TLRPC.TL_chatAdminRights();
+        rights.change_info = true;
+        rights.post_messages = true;
+        rights.edit_messages = true;
+        rights.delete_messages = true;
+        rights.ban_users = true;
+        rights.invite_users = true;
+        rights.pin_messages = true;
+        rights.manage_call = true;
+        rights.other = true;
+        rights.post_stories = true;
+        rights.edit_stories = true;
+        rights.delete_stories = true;
+        return rights;
     }
 
     // Channels (broadcast) and supergroups both use TL_channel in real
@@ -2567,7 +3124,7 @@ public class RestBridge {
         channel.access_hash = 1;
         channel.flags |= TLObject.FLAG_13; // access_hash present
         channel.title = conv.optString("name", "Channel");
-        channel.photo = new TLRPC.TL_chatPhotoEmpty();
+        channel.photo = buildChatPhoto(conv);
         channel.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
         channel.broadcast = true;
         channel.megagroup = false;
@@ -2584,9 +3141,12 @@ public class RestBridge {
             channel.flags |= TLObject.FLAG_17; // participants_count present
         }
 
-        String ownerId = conv.optString("owner", null);
+        String ownerId = refId(conv, "owner");
         if (ownerId != null && ownerId.equals(selfMongoId)) {
             channel.creator = true;
+            channel.admin_rights = fullAdminRights();
+        } else if (isSelfAdmin(conv)) {
+            channel.admin_rights = fullAdminRights();
         }
 
         return channel;
@@ -2675,6 +3235,12 @@ public class RestBridge {
             TLRPC.TL_userProfilePhoto photo = new TLRPC.TL_userProfilePhoto();
             photo.photo_id = idForUrl(absoluteUrl(avatar));
             photo.dc_id = 1;
+            photo.photo_small = new TLRPC.TL_fileLocationToBeDeprecated();
+            photo.photo_small.volume_id = -photo.photo_id;
+            photo.photo_small.local_id = 'a';
+            photo.photo_big = new TLRPC.TL_fileLocationToBeDeprecated();
+            photo.photo_big.volume_id = -photo.photo_id;
+            photo.photo_big.local_id = 'c';
             user.photo = photo;
             user.flags |= TLObject.FLAG_5; // photo present
         }
@@ -2812,6 +3378,66 @@ public class RestBridge {
                 throw new RestException(code, msg);
             }
             return text;
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    // multipart/form-data upload of a single file (+ optional text fields),
+    // for the backend's multer-based endpoints.
+    private JSONObject requestMultipart(String method, String path, JSONObject fields, String fileField, java.io.File file, String fileName, String mimeType) throws Exception {
+        String boundary = "----7eve9chat" + System.currentTimeMillis();
+        URL url = new URL(BASE_URL + path);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try {
+            conn.setRequestMethod(method);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setDoOutput(true);
+            conn.setChunkedStreamingMode(64 * 1024);
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setRequestProperty("Accept", "application/json");
+            if (authToken != null) {
+                conn.setRequestProperty("Authorization", "Bearer " + authToken);
+            }
+            try (OutputStream os = conn.getOutputStream()) {
+                if (fields != null) {
+                    Iterator<String> keys = fields.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + key + "\"\r\n\r\n"
+                                + fields.get(key) + "\r\n").getBytes(StandardCharsets.UTF_8));
+                    }
+                }
+                os.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + fileField + "\"; filename=\"" + fileName
+                        + "\"\r\nContent-Type: " + mimeType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+                    byte[] buf = new byte[64 * 1024];
+                    int r;
+                    while ((r = in.read(buf)) != -1) {
+                        os.write(buf, 0, r);
+                    }
+                }
+                os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+
+            int code = conn.getResponseCode();
+            InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+            String text = readAll(stream);
+            if (code < 200 || code >= 300) {
+                String msg = "Request failed";
+                try {
+                    JSONObject errJson = text != null && text.length() > 0 ? new JSONObject(text) : new JSONObject();
+                    msg = errJson.optString("message", msg);
+                } catch (Exception ignore) {
+                }
+                throw new RestException(code, msg);
+            }
+            try {
+                return text != null && text.length() > 0 ? new JSONObject(text) : new JSONObject();
+            } catch (Exception parseErr) {
+                return new JSONObject();
+            }
         } finally {
             conn.disconnect();
         }
