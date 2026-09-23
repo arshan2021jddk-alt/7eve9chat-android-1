@@ -361,7 +361,7 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", true); // 7eve9chat: no FCM, keep-alive delivers notifications
+            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false); // 7eve9chat: opt-in via Notifications > Keep-Alive Service
         }
         if (enabled) {
             try {

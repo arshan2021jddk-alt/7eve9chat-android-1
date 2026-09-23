@@ -275,6 +275,7 @@ public class SocketBridge {
                 update.status = status;
             }
 
+            RestBridge.getInstance(currentAccount).rememberUserStatus(update.user_id, update.status);
             TLRPC.TL_updates updates = new TLRPC.TL_updates();
             updates.updates.add(update);
             updates.date = (int) (System.currentTimeMillis() / 1000L);

@@ -604,6 +604,9 @@ public class ProfileActionsView extends View {
     }
 
     public void set(int key, boolean enabled) {
+        if (key == KEY_GIFT) {
+            enabled = false; // 7eve9chat: no gift store, hide "Gift" in profiles
+        }
         boolean changed;
         if (enabled) {
             changed = allAvailableActions.add(key);

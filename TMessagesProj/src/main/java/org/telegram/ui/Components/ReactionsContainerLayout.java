@@ -2105,6 +2105,14 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                } else {
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
+            } else if (currentReaction.emojicon != null && Emoji.getEmojiBigDrawable(currentReaction.emojicon) != null) {
+                // 7eve9chat: picker shows the app's own emoji (same look as in messages)
+                enterImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
+                loopImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
+                pressedBackupImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
+                if (lockIconView != null) {
+                    lockIconView.setImageReceiver(loopImageView.getImageReceiver());
+                }
             } else if (currentReaction.emojicon != null) {
                 TLRPC.TL_availableReaction defaultReaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
                 if (defaultReaction != null) {
