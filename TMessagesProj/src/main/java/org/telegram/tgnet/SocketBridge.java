@@ -47,6 +47,10 @@ public class SocketBridge {
 
     private final int currentAccount;
     private Socket socket;
+    // Group/channel rooms (typing etc. are broadcast per conversation room);
+    // re-joined on every (re)connect.
+    private final java.util.Set<String> conversationRooms =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
     private SocketBridge(int account) {
         currentAccount = account;
@@ -78,6 +82,12 @@ public class SocketBridge {
         socket.on("typing", args -> onTyping(args, true));
         socket.on("stop_typing", args -> onTyping(args, false));
         socket.on("new_conversation", args -> refreshDialogs());
+        final Socket connectedSocket = socket;
+        socket.on(Socket.EVENT_CONNECT, args -> {
+            for (String room : conversationRooms) {
+                connectedSocket.emit("join_conversation", room);
+            }
+        });
         socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
             if (args.length > 0) {
                 FileLog.d("SocketBridge connect error: " + args[0]);
@@ -85,6 +95,22 @@ public class SocketBridge {
         });
 
         socket.connect();
+    }
+
+    public void joinConversation(String conversationId) {
+        if (conversationId != null && conversationRooms.add(conversationId)) {
+            Socket s = socket;
+            if (s != null && s.connected()) {
+                s.emit("join_conversation", conversationId);
+            }
+        }
+    }
+
+    public void emit(String event, JSONObject data) {
+        Socket s = socket;
+        if (s != null && s.connected()) {
+            s.emit(event, data);
+        }
     }
 
     public synchronized void disconnect() {

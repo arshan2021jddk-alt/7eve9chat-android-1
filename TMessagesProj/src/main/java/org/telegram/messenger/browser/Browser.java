@@ -678,6 +678,10 @@ public class Browser {
     }
 
     public static boolean isInternalUri(Uri uri, boolean all, boolean[] forceBrowser) {
+        Uri ownLink = LaunchActivity.map7eve9Link(uri);
+        if (ownLink != null) {
+            uri = ownLink;
+        }
         String host = AndroidUtilities.getHostAuthority(uri);
         host = host != null ? host.toLowerCase() : "";
 

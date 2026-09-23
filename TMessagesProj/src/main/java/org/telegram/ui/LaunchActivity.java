@@ -261,6 +261,31 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     public final static String EXTRA_FORCE_REQUEST = "force_request";
     public final static Pattern PREFIX_T_ME_PATTERN = Pattern.compile("^(?:http(?:s|)://|)([A-z0-9-]+?)\\.t\\.me");
 
+    // 7eve9chat: links to our own site (7eve9craft.ir/gp/.., /cl/.., /pv/..,
+    // /invite/CODE, /username) are rewritten to the t.me form the rest of the
+    // app already understands; RestBridge resolves them against our backend.
+    public static Uri map7eve9Link(Uri uri) {
+        if (uri == null || uri.getHost() == null) {
+            return null;
+        }
+        String host = uri.getHost().toLowerCase();
+        if (!host.equals("7eve9craft.ir") && !host.equals("www.7eve9craft.ir")) {
+            return null;
+        }
+        String path = uri.getPath() == null ? "" : uri.getPath();
+        String mapped;
+        if (path.startsWith("/invite/") && path.length() > 8) {
+            mapped = "/+" + path.substring(8);
+        } else if ((path.startsWith("/gp/") || path.startsWith("/cl/") || path.startsWith("/pv/")) && path.length() > 4) {
+            mapped = "/" + path.substring(4);
+        } else if (path.matches("^/[a-zA-Z][a-zA-Z0-9_]{3,31}/?$") && !path.startsWith("/admin") && !path.startsWith("/login")) {
+            mapped = path;
+        } else {
+            return null;
+        }
+        return Uri.parse("https://t.me" + mapped + (TextUtils.isEmpty(uri.getQuery()) ? "" : "?" + uri.getQuery()));
+    }
+
     public static boolean isActive;
     private static int activeInstanceCount;
     public static boolean isResumed;
@@ -1964,6 +1989,11 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                                 case "http":
                                 case "https": {
                                     String host = data.getHost().toLowerCase();
+                                    Uri ownLink = map7eve9Link(data);
+                                    if (ownLink != null) {
+                                        data = ownLink;
+                                        host = "t.me";
+                                    }
                                     Matcher prefixMatcher = PREFIX_T_ME_PATTERN.matcher(host);
                                     boolean isPrefix = prefixMatcher.find();
                                     if (host.equals("telegram.me") || host.equals("t.me") || host.equals("telegram.dog") || isPrefix) {

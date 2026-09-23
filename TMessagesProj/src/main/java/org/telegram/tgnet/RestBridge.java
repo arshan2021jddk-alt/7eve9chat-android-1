@@ -116,6 +116,7 @@ public class RestBridge {
     // full profile from a chat) can still call backend endpoints keyed by
     // Mongo id.
     private final HashMap<Long, String> userMongoIdByTlId = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> storyMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
 
     // TL int32 message id -> Mongo message id. idFromMongoIdInt32() is a
     // one-way hash (last 28 bits of the ObjectId), so edit/delete/react need
@@ -201,6 +202,8 @@ public class RestBridge {
 
     public void clearAuthToken() {
         authToken = null;
+        socketConnectAttempted = false;
+        SocketBridge.getInstance(currentAccount).disconnect();
         selfMongoId = null;
         prefs().edit().remove("jwt").remove("selfMongoId").apply();
     }
@@ -487,6 +490,54 @@ public class RestBridge {
             if (request instanceof TLRPC.TL_messages_editChatPhoto) {
                 TLRPC.TL_messages_editChatPhoto req = (TLRPC.TL_messages_editChatPhoto) request;
                 handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_contacts_importContacts) {
+                handleImportContacts((TLRPC.TL_contacts_importContacts) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteHistory) {
+                handleDeleteHistory((TLRPC.TL_messages_deleteHistory) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_setTyping) {
+                handleSetTyping((TLRPC.TL_messages_setTyping) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_deleteStories) {
+                TL_stories.TL_stories_deleteStories req = (TL_stories.TL_stories_deleteStories) request;
+                handleStoryAction(req.id, "DELETE", "", onComplete, true);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_incrementStoryViews) {
+                TL_stories.TL_stories_incrementStoryViews req = (TL_stories.TL_stories_incrementStoryViews) request;
+                handleStoryAction(req.id, "POST", "/view", onComplete, false);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_readStories) {
+                Vector<Vector.Int> none = new Vector<>(Vector.Int::TLDeserialize);
+                complete(onComplete, none, null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_contacts_resolveUsername) {
+                handleResolveUsername(((TLRPC.TL_contacts_resolveUsername) request).username, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_contacts_search) {
+                handleContactsSearch((TLRPC.TL_contacts_search) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendMedia) {
+                handleSendMedia((TLRPC.TL_messages_sendMedia) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendMultiMedia) {
+                handleSendMultiMedia((TLRPC.TL_messages_sendMultiMedia) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_auth_logOut) {
+                clearAuthToken();
+                complete(onComplete, new TLRPC.TL_auth_loggedOut(), null);
                 return true;
             }
             if (request instanceof TL_stories.TL_stories_sendStory) {
@@ -946,6 +997,359 @@ public class RestBridge {
     }
 
     // ---------------------------------------------------------------
+    // contacts.resolveUsername -> GET /conversations/handle/:name (users and
+    // public groups/channels share one namespace there), or, for a raw
+    // 24-hex id from a /gp/<id> or /cl/<id> link, GET /messages/conversations/:id
+    // ---------------------------------------------------------------
+    private void handleResolveUsername(String username, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                if (username == null || username.isEmpty()) {
+                    complete(onComplete, null, tlError(400, "USERNAME_INVALID"));
+                    return;
+                }
+                TLRPC.TL_contacts_resolvedPeer result = new TLRPC.TL_contacts_resolvedPeer();
+                JSONObject found;
+                boolean isUser;
+                try {
+                    if (username.matches("^[0-9a-fA-F]{24}$")) {
+                        found = request("GET", "/messages/conversations/" + username, null, true);
+                        isUser = false;
+                    } else {
+                        found = request("GET", "/conversations/handle/" + java.net.URLEncoder.encode(username, "UTF-8"), null, true);
+                        isUser = found.optBoolean("isUser", false);
+                    }
+                } catch (RestException e) {
+                    if (e.statusCode == 404 || e.statusCode == 400 || e.statusCode == 500) {
+                        complete(onComplete, null, tlError(400, "USERNAME_NOT_OCCUPIED"));
+                        return;
+                    }
+                    throw e;
+                }
+                if (!found.has("_id")) {
+                    complete(onComplete, null, tlError(400, "USERNAME_NOT_OCCUPIED"));
+                    return;
+                }
+
+                if (isUser) {
+                    TLRPC.TL_user user = buildTLUser(found, found.getString("_id").equals(selfMongoId));
+                    result.users.add(user);
+                    TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                    peer.user_id = user.id;
+                    result.peer = peer;
+                } else {
+                    result.peer = addConversationChat(found, result.chats);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Maps a backend group/channel JSON to its TL chat, registers the id
+    // mapping and returns the matching peer.
+    private TLRPC.Peer addConversationChat(JSONObject conv, ArrayList<TLRPC.Chat> chats) {
+        String convId = conv.optString("_id");
+        long tlId = idFromMongoId(convId);
+        conversationIdByChatPeer.put(tlId, convId);
+        savePeerMap("peerMapChat", conversationIdByChatPeer);
+        if ("channel".equals(conv.optString("type"))) {
+            chats.add(buildTLChannel(conv, tlId));
+            TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
+            peer.channel_id = tlId;
+            return peer;
+        }
+        chats.add(buildTLChat(conv, tlId));
+        TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
+        peer.chat_id = tlId;
+        return peer;
+    }
+
+    // ---------------------------------------------------------------
+    // contacts.importContacts -> POST /auth/check-contacts {phones}
+    // (phone-book sync: which of my contacts are on 7eve9chat)
+    // ---------------------------------------------------------------
+    private void handleImportContacts(TLRPC.TL_contacts_importContacts req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_contacts_importedContacts result = new TLRPC.TL_contacts_importedContacts();
+            try {
+                HashMap<String, Long> clientIdByPhone = new HashMap<>();
+                JSONArray phones = new JSONArray();
+                for (TLRPC.TL_inputPhoneContact c : req.contacts) {
+                    String phone = normalizePhone(c.phone);
+                    if (phone.length() == 11 && phone.startsWith("09") && !clientIdByPhone.containsKey(phone)) {
+                        clientIdByPhone.put(phone, c.client_id);
+                        phones.put(phone);
+                    }
+                }
+                if (phones.length() > 0) {
+                    JSONObject body = new JSONObject();
+                    body.put("phones", phones);
+                    String text = requestText("POST", "/auth/check-contacts", body, true);
+                    JSONArray users = text != null && text.trim().startsWith("[") ? new JSONArray(text) : new JSONArray();
+                    for (int i = 0; i < users.length(); i++) {
+                        JSONObject u = users.getJSONObject(i);
+                        if (u.optString("_id").equals(selfMongoId)) {
+                            continue;
+                        }
+                        TLRPC.TL_user user = buildTLUser(u, false);
+                        addUserOnce(result.users, user);
+                        Long clientId = clientIdByPhone.get(u.optString("phone", ""));
+                        if (clientId != null) {
+                            TLRPC.TL_importedContact imported = new TLRPC.TL_importedContact();
+                            imported.user_id = user.id;
+                            imported.client_id = clientId;
+                            result.imported.add(imported);
+                        }
+                    }
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, result, null);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.deleteHistory -> DELETE /conversations/:id
+    // ---------------------------------------------------------------
+    private void handleDeleteHistory(TLRPC.TL_messages_deleteHistory req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = resolveConversationId(req.peer);
+                if (convId != null) {
+                    request("DELETE", "/conversations/" + convId, null, true);
+                }
+                complete(onComplete, new TLRPC.TL_messages_affectedHistory(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.setTyping -> socket "typing" / "stop_typing"
+    // ---------------------------------------------------------------
+    private void handleSetTyping(TLRPC.TL_messages_setTyping req, RequestDelegate onComplete) {
+        try {
+            String convId = resolveConversationId(req.peer);
+            if (convId != null && selfMongoId != null) {
+                JSONObject data = new JSONObject();
+                data.put("conversationId", convId);
+                data.put("userId", selfMongoId);
+                boolean cancel = req.action instanceof TLRPC.TL_sendMessageCancelAction;
+                if (!cancel) {
+                    TLRPC.User self = UserConfig.getInstance(currentAccount).getCurrentUser();
+                    data.put("name", self != null && self.first_name != null ? self.first_name : "");
+                }
+                SocketBridge.getInstance(currentAccount).emit(cancel ? "stop_typing" : "typing", data);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        complete(onComplete, new TLRPC.TL_boolTrue(), null);
+    }
+
+    // ---------------------------------------------------------------
+    // stories.deleteStories -> DELETE /stories/:id
+    // stories.incrementStoryViews -> POST /stories/:id/view
+    // ---------------------------------------------------------------
+    private void handleStoryAction(ArrayList<Integer> ids, String method, String suffix, RequestDelegate onComplete, boolean returnIds) {
+        executor.execute(() -> {
+            Vector<Vector.Int> done = new Vector<>(Vector.Int::TLDeserialize);
+            for (Integer id : ids) {
+                String mongoId = storyMongoIdByTlId.get(id);
+                if (mongoId == null) {
+                    continue;
+                }
+                try {
+                    request(method, "/stories/" + mongoId + suffix, "POST".equals(method) ? new JSONObject() : null, true);
+                    done.objects.add(new Vector.Int(id));
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+            if (returnIds) {
+                complete(onComplete, done, null);
+            } else {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // contacts.search -> GET /auth/search?q= (people) +
+    // GET /conversations/discover/search?query= (public groups/channels)
+    // ---------------------------------------------------------------
+    private void handleContactsSearch(TLRPC.TL_contacts_search req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_contacts_found result = new TLRPC.TL_contacts_found();
+            try {
+                String q = req.q == null ? "" : req.q.trim();
+                if (q.startsWith("@")) {
+                    q = q.substring(1);
+                }
+                if (q.length() < 2) {
+                    complete(onComplete, result, null);
+                    return;
+                }
+                String encoded = java.net.URLEncoder.encode(q, "UTF-8");
+                JSONArray users = requestArray("GET", "/auth/search?q=" + encoded, null, true);
+                for (int i = 0; i < users.length(); i++) {
+                    TLRPC.TL_user user = buildTLUser(users.getJSONObject(i), false);
+                    user.contact = false;
+                    addUserOnce(result.users, user);
+                    TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                    peer.user_id = user.id;
+                    result.results.add(peer);
+                }
+                try {
+                    JSONArray convs = requestArray("GET", "/conversations/discover/search?query=" + encoded, null, true);
+                    for (int i = 0; i < convs.length(); i++) {
+                        result.results.add(addConversationChat(convs.getJSONObject(i), result.chats));
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, result, null);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // messages.sendMedia / sendMultiMedia -> POST /messages (multipart
+    // "file" + conversationId/receiverId + text caption)
+    // ---------------------------------------------------------------
+    private JSONObject sendOneMedia(TLRPC.InputPeer peer, TLRPC.InputMedia media, String caption) throws Exception {
+        TLRPC.InputFile inputFile;
+        String mime;
+        String fileName = null;
+        String type;
+        if (media instanceof TLRPC.TL_inputMediaUploadedPhoto) {
+            inputFile = media.file;
+            mime = guessMime(inputFile != null ? inputFile.name : null, "image/jpeg");
+            type = "image";
+        } else if (media instanceof TLRPC.TL_inputMediaUploadedDocument) {
+            inputFile = media.file;
+            mime = media.mime_type != null && !media.mime_type.isEmpty()
+                    ? media.mime_type
+                    : guessMime(inputFile != null ? inputFile.name : null, "application/octet-stream");
+            boolean voice = false;
+            boolean isVideo = false;
+            for (TLRPC.DocumentAttribute attr : media.attributes) {
+                if (attr instanceof TLRPC.TL_documentAttributeFilename) {
+                    fileName = attr.file_name;
+                } else if (attr instanceof TLRPC.TL_documentAttributeAudio && attr.voice) {
+                    voice = true;
+                } else if (attr instanceof TLRPC.TL_documentAttributeVideo) {
+                    isVideo = true;
+                }
+            }
+            if (voice) {
+                type = "voice";
+            } else if (media.force_file) {
+                type = "file";
+            } else if (isVideo || mime.startsWith("video/")) {
+                type = "video";
+            } else if (mime.startsWith("audio/")) {
+                type = "audio";
+            } else if (mime.startsWith("image/") && !"image/webp".equals(mime)) {
+                type = "image";
+            } else {
+                type = "file";
+            }
+        } else {
+            throw new RestException(400, "MEDIA_INVALID");
+        }
+        if (inputFile == null) {
+            throw new RestException(400, "MEDIA_EMPTY");
+        }
+        if (fileName == null || fileName.isEmpty()) {
+            fileName = inputFile.name != null && inputFile.name.contains(".") ? inputFile.name : "file" + extensionForMime(mime);
+        }
+
+        java.io.File file = assembleUpload(inputFile);
+        try {
+            JSONObject fields = new JSONObject();
+            if (!putMessageTarget(fields, peer)) {
+                throw new RestException(404, "Conversation not found");
+            }
+            fields.put("type", type);
+            if (caption != null && !caption.isEmpty()) {
+                fields.put("text", caption);
+            }
+            JSONObject sent = requestMultipart("POST", "/messages", fields, "file", file, fileName, mime);
+            rememberConversation(peer, sent);
+            return sent;
+        } finally {
+            file.delete();
+        }
+    }
+
+    private void handleSendMedia(TLRPC.TL_messages_sendMedia req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject sent = sendOneMedia(req.peer, req.media, req.message);
+                TLRPC.TL_message tlMessage = buildTLMessage(sent, peerFromInput(req.peer));
+                TL_update.TL_updateNewMessage update = new TL_update.TL_updateNewMessage();
+                update.message = tlMessage;
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(update);
+                updates.date = tlMessage.date;
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void handleSendMultiMedia(TLRPC.TL_messages_sendMultiMedia req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                TLRPC.Peer peer = peerFromInput(req.peer);
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                for (TLRPC.TL_inputSingleMedia single : req.multi_media) {
+                    JSONObject sent = sendOneMedia(req.peer, single.media, single.message);
+                    TLRPC.TL_message tlMessage = buildTLMessage(sent, peer);
+
+                    TL_update.TL_updateMessageID idUpdate = new TL_update.TL_updateMessageID();
+                    idUpdate.id = tlMessage.id;
+                    idUpdate.random_id = single.random_id;
+                    updates.updates.add(idUpdate);
+
+                    TL_update.TL_updateNewMessage update = new TL_update.TL_updateNewMessage();
+                    update.message = tlMessage;
+                    updates.updates.add(update);
+                    updates.date = tlMessage.date;
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
     // stories.sendStory -> POST /stories (multipart "file" + caption)
     // ---------------------------------------------------------------
     private void handleSendStory(TL_stories.TL_stories_sendStory req, RequestDelegate onComplete) {
@@ -1019,6 +1423,8 @@ public class RestBridge {
                     JSONObject conv = conversations.getJSONObject(i);
                     String convType = conv.optString("type", "private");
                     String convId = conv.getString("_id");
+                    // Needed to receive typing/room events for this chat.
+                    SocketBridge.getInstance(currentAccount).joinConversation(convId);
 
                     TLRPC.TL_dialog dialog = new TLRPC.TL_dialog();
                     dialog.notify_settings = new TLRPC.TL_peerNotifySettings();
@@ -1111,16 +1517,15 @@ public class RestBridge {
     private void handleSendMessage(TLRPC.TL_messages_sendMessage req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
-                String conversationId = resolveConversationId(req.peer);
-                if (conversationId == null) {
+                JSONObject body = new JSONObject();
+                if (!putMessageTarget(body, req.peer)) {
                     complete(onComplete, null, restError(404, "Conversation not found - open the dialogs list first"));
                     return;
                 }
-                JSONObject body = new JSONObject();
-                body.put("conversationId", conversationId);
                 body.put("text", req.message);
                 body.put("type", "text");
                 JSONObject sent = request("POST", "/messages", body, true);
+                rememberConversation(req.peer, sent);
 
                 TLRPC.TL_updateShortSentMessage update = new TLRPC.TL_updateShortSentMessage();
                 update.id = idFromMongoIdInt32(sent.getString("_id"));
@@ -1587,6 +1992,7 @@ public class RestBridge {
     private TL_stories.TL_storyItem buildStoryItem(JSONObject story, boolean out) throws Exception {
         TL_stories.TL_storyItem item = new TL_stories.TL_storyItem();
         item.id = idFromMongoIdInt32(story.getString("_id"));
+        storyMongoIdByTlId.put(item.id, story.getString("_id"));
         item.date = parseIsoToEpochSeconds(story.optString("createdAt", null));
         item.expire_date = parseIsoToEpochSeconds(story.optString("expiresAt", null));
         item.out = out;
@@ -2724,6 +3130,44 @@ public class RestBridge {
         return null;
     }
 
+    // conversationId when we know it, otherwise receiverId for a first
+    // message to a user (the backend then creates the private chat).
+    private boolean putMessageTarget(JSONObject body, TLRPC.InputPeer peer) throws Exception {
+        String conversationId = resolveConversationId(peer);
+        if (conversationId != null) {
+            body.put("conversationId", conversationId);
+            return true;
+        }
+        if (peer != null && peer.user_id != 0) {
+            String receiverMongoId = userMongoIdByTlId.get(peer.user_id);
+            if (receiverMongoId != null) {
+                body.put("receiverId", receiverMongoId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void rememberConversation(TLRPC.InputPeer peer, JSONObject sentMessage) {
+        if (peer == null || peer.user_id == 0 || conversationIdByUserPeer.containsKey(peer.user_id)) {
+            return;
+        }
+        String convId = sentMessage.optString("conversationId", "");
+        if (convId.length() == 24) {
+            conversationIdByUserPeer.put(peer.user_id, convId);
+            savePeerMap("peerMapUser", conversationIdByUserPeer);
+        }
+    }
+
+    private static TLRPC.Peer peerFromInput(TLRPC.InputPeer input) {
+        if (input instanceof TLRPC.TL_inputPeerUser || input.user_id != 0) {
+            TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+            peer.user_id = input.user_id;
+            return peer;
+        }
+        return peerChatFromInput(input);
+    }
+
     private static TLRPC.Peer peerUserFromInput(TLRPC.TL_inputPeerUser input) {
         TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
         peer.user_id = input.user_id;
@@ -2853,6 +3297,18 @@ public class RestBridge {
                     conn.setRequestProperty("Range", "bytes=" + start + "-" + end);
 
                     int code = conn.getResponseCode();
+                    if (code == 416) {
+                        // Asked past the end: the file size was a multiple of
+                        // the chunk size. An empty chunk tells the loader it's done.
+                        TLRPC.TL_upload_file done = new TLRPC.TL_upload_file();
+                        done.type = new TLRPC.TL_storage_fileUnknown();
+                        done.mtime = (int) (System.currentTimeMillis() / 1000L);
+                        NativeByteBuffer empty = new NativeByteBuffer(1);
+                        empty.limit(0);
+                        done.bytes = empty;
+                        complete(onComplete, done, null);
+                        return;
+                    }
                     if (code != 200 && code != 206) {
                         complete(onComplete, null, restError(code, "File fetch failed"));
                         return;
@@ -2913,6 +3369,12 @@ public class RestBridge {
         size.w = 1280;
         size.h = 1280;
         size.size = 0; // unknown ahead of download; harmless placeholder
+        // Normally derived in PhotoSize.TLdeserialize(); without it
+        // ImageLocation.getForPhoto() returns null and the photo stays black.
+        size.location = new TLRPC.TL_fileLocationToBeDeprecated();
+        size.location.volume_id = -photo.id;
+        size.location.local_id = size.type.charAt(0);
+        size.location.dc_id = 1;
         photo.sizes.add(size);
 
         TLRPC.TL_messageMediaPhoto media = new TLRPC.TL_messageMediaPhoto();

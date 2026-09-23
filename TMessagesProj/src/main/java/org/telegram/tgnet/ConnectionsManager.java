@@ -849,6 +849,13 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onLogout(final int currentAccount) {
+        // 7eve9chat: the native layer "logs out" on every cold start, because
+        // it never has an MTProto auth key (we never talk to Telegram's
+        // datacenters). The real session is RestBridge's JWT, so ignore this
+        // while we still hold one; a real logout clears it first.
+        if (RestBridge.getInstance(currentAccount).getAuthToken() != null) {
+            return;
+        }
         AndroidUtilities.runOnUIThread(() -> {
             AccountInstance accountInstance = AccountInstance.getInstance(currentAccount);
             if (accountInstance.getUserConfig().getClientUserId() != 0) {
