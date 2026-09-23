@@ -854,6 +854,36 @@ public class RestBridge {
                 handleGetEmojiSets(onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_getEmojiKeywords) {
+                handleEmojiKeywords(((TLRPC.TL_messages_getEmojiKeywords) request).lang_code, 0, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getEmojiKeywordsDifference) {
+                TLRPC.TL_messages_getEmojiKeywordsDifference diff = (TLRPC.TL_messages_getEmojiKeywordsDifference) request;
+                handleEmojiKeywords(diff.lang_code, diff.from_version, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getEmojiKeywordsLanguages) {
+                complete(onComplete, new Vector<>(TLRPC.TL_emojiLanguage::TLdeserialize), null);
+                return true;
+            }
+            if (request instanceof TL_account.updateEmojiStatus) {
+                handleUpdateEmojiStatus((TL_account.updateEmojiStatus) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.getDefaultEmojiStatuses) {
+                handleDefaultEmojiStatuses(onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.getRecentEmojiStatuses
+                    || request instanceof TL_account.getChannelDefaultEmojiStatuses) {
+                complete(onComplete, new TL_account.TL_emojiStatuses(), null);
+                return true;
+            }
+            if (request instanceof TL_account.clearRecentEmojiStatuses) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_getCustomEmojiDocuments) {
                 Vector<TLRPC.Document> docs = new Vector<>(TLRPC.Document::TLdeserialize);
                 for (Long id : ((TLRPC.TL_messages_getCustomEmojiDocuments) request).document_id) {
@@ -988,8 +1018,72 @@ public class RestBridge {
                 handleSimpleConversationCall(req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id, "PUT", "", body, new TLRPC.TL_updates(), onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_getQuickReplies) {
+                handleGetQuickReplies(onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getQuickReplyMessages) {
+                handleGetQuickReplyMessages((TLRPC.TL_messages_getQuickReplyMessages) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteQuickReplyMessages) {
+                handleDeleteQuickReplyMessages((TLRPC.TL_messages_deleteQuickReplyMessages) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendQuickReplyMessages) {
+                handleSendQuickReplyMessages((TLRPC.TL_messages_sendQuickReplyMessages) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_deleteQuickReplyShortcut) {
+                handleQuickReplyBoolCall("DELETE", "/business/quick-replies/" + ((TLRPC.TL_messages_deleteQuickReplyShortcut) request).shortcut_id, null, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editQuickReplyShortcut) {
+                TLRPC.TL_messages_editQuickReplyShortcut req = (TLRPC.TL_messages_editQuickReplyShortcut) request;
+                JSONObject body = new JSONObject();
+                try {
+                    body.put("shortcut", req.shortcut);
+                } catch (Exception ignore) {
+                }
+                handleQuickReplyBoolCall("PUT", "/business/quick-replies/" + req.shortcut_id, body, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_reorderQuickReplies) {
+                JSONObject body = new JSONObject();
+                try {
+                    body.put("order", new JSONArray(((TLRPC.TL_messages_reorderQuickReplies) request).order));
+                } catch (Exception ignore) {
+                }
+                handleQuickReplyBoolCall("POST", "/business/quick-replies/reorder", body, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_checkQuickReplyShortcut) {
+                String shortcut = ((TLRPC.TL_messages_checkQuickReplyShortcut) request).shortcut;
+                try {
+                    handleQuickReplyBoolCall("GET", "/business/quick-replies/check?shortcut=" + java.net.URLEncoder.encode(shortcut == null ? "" : shortcut, "UTF-8"), null, onComplete);
+                } catch (Exception e) {
+                    complete(onComplete, new TLRPC.TL_boolFalse(), null);
+                }
+                return true;
+            }
+            if (request instanceof TL_account.updateBusinessWorkHours
+                    || request instanceof TL_account.updateBusinessLocation
+                    || request instanceof TL_account.updateBusinessIntro
+                    || request instanceof TL_account.updateBusinessGreetingMessage
+                    || request instanceof TL_account.updateBusinessAwayMessage) {
+                handleBusinessSettings(request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_help_getTimezonesList) {
+                complete(onComplete, buildTimezones(), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_editCreator) {
+                handleEditCreator((TLRPC.TL_channels_editCreator) request, onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_channels_getAdminLog) {
-                complete(onComplete, new TLRPC.TL_channels_adminLogResults(), null);
+                handleGetAdminLog((TLRPC.TL_channels_getAdminLog) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_channels_setDiscussionGroup) {
@@ -1412,6 +1506,10 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_contacts_search) {
                 handleContactsSearch((TLRPC.TL_contacts_search) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.getWebPagePreview) {
+                handleGetWebPagePreview((TL_account.getWebPagePreview) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_sendMedia) {
@@ -3041,7 +3139,7 @@ public class RestBridge {
                 kind = lower.endsWith(".webp") || lower.endsWith(".tgs") ? "sticker" : lower.endsWith(".mp4") ? "gif" : "file";
             }
             JSONObject body = new JSONObject();
-            if (!putMessageTarget(body, peer)) {
+            if (!putSendTarget(body, peer)) {
                 throw new RestException(404, "Conversation not found");
             }
             body.put("type", kind);
@@ -3051,7 +3149,7 @@ public class RestBridge {
                 body.put("text", caption);
             }
             putReplyTo(body, replyTo);
-            JSONObject sent = request("POST", "/messages", body, true);
+            JSONObject sent = request("POST", sendPath(), body, true);
             rememberConversation(peer, sent);
             return sent;
         }
@@ -3060,7 +3158,7 @@ public class RestBridge {
                 throw new RestException(400, "MEDIA_INVALID");
             }
             JSONObject body = new JSONObject();
-            if (!putMessageTarget(body, peer)) {
+            if (!putSendTarget(body, peer)) {
                 throw new RestException(404, "Conversation not found");
             }
             JSONObject loc = new JSONObject();
@@ -3072,7 +3170,7 @@ public class RestBridge {
                 body.put("text", caption);
             }
             putReplyTo(body, replyTo);
-            JSONObject sent = request("POST", "/messages", body, true);
+            JSONObject sent = request("POST", sendPath(), body, true);
             rememberConversation(peer, sent);
             return sent;
         }
@@ -3126,7 +3224,7 @@ public class RestBridge {
         java.io.File file = assembleUpload(inputFile);
         try {
             JSONObject fields = new JSONObject();
-            if (!putMessageTarget(fields, peer)) {
+            if (!putSendTarget(fields, peer)) {
                 throw new RestException(404, "Conversation not found");
             }
             fields.put("type", type);
@@ -3151,7 +3249,7 @@ public class RestBridge {
             if (meta.length() > 0) {
                 fields.put("mediaMeta", meta.toString());
             }
-            JSONObject sent = requestMultipart("POST", "/messages", fields, "file", file, fileName, mime);
+            JSONObject sent = requestMultipart("POST", sendPath(), fields, "file", file, fileName, mime);
             rememberConversation(peer, sent);
             return sent;
         } finally {
@@ -3160,6 +3258,27 @@ public class RestBridge {
     }
 
     private void handleSendMedia(TLRPC.TL_messages_sendMedia req, RequestDelegate onComplete) {
+        if (req.media instanceof TLRPC.TL_inputMediaWebPage) {
+            TLRPC.TL_messages_sendMessage text = new TLRPC.TL_messages_sendMessage();
+            text.peer = req.peer;
+            text.message = req.message;
+            text.entities = req.entities;
+            text.reply_to = req.reply_to;
+            text.random_id = req.random_id;
+            handleSendMessage(text, onComplete);
+            return;
+        }
+        if (req.quick_reply_shortcut != null) {
+            ArrayList<TLRPC.TL_inputSingleMedia> one = new ArrayList<>();
+            TLRPC.TL_inputSingleMedia single = new TLRPC.TL_inputSingleMedia();
+            single.media = req.media;
+            single.message = req.message;
+            single.entities = req.entities;
+            single.random_id = req.random_id;
+            one.add(single);
+            sendToQuickReply(req.quick_reply_shortcut, one, onComplete);
+            return;
+        }
         executor.execute(() -> {
             try {
                 JSONObject sent = sendOneMedia(req.peer, req.media, req.message, req.reply_to, req.entities);
@@ -3179,6 +3298,10 @@ public class RestBridge {
     }
 
     private void handleSendMultiMedia(TLRPC.TL_messages_sendMultiMedia req, RequestDelegate onComplete) {
+        if (req.quick_reply_shortcut != null) {
+            sendToQuickReply(req.quick_reply_shortcut, req.multi_media, onComplete);
+            return;
+        }
         executor.execute(() -> {
             try {
                 TLRPC.Peer peer = peerFromInput(req.peer);
@@ -3389,6 +3512,16 @@ public class RestBridge {
     // messages.sendMessage -> POST /messages
     // ---------------------------------------------------------------
     private void handleSendMessage(TLRPC.TL_messages_sendMessage req, RequestDelegate onComplete) {
+        if (req.quick_reply_shortcut != null) {
+            ArrayList<TLRPC.TL_inputSingleMedia> one = new ArrayList<>();
+            TLRPC.TL_inputSingleMedia single = new TLRPC.TL_inputSingleMedia();
+            single.message = req.message;
+            single.entities = req.entities;
+            single.random_id = req.random_id;
+            one.add(single);
+            sendToQuickReply(req.quick_reply_shortcut, one, onComplete);
+            return;
+        }
         executor.execute(() -> {
             try {
                 JSONObject body = new JSONObject();
@@ -3398,6 +3531,7 @@ public class RestBridge {
                 }
                 body.put("text", req.message);
                 body.put("type", "text");
+                if (req.no_webpage) body.put("noLinkPreview", true);
                 JSONArray formatting = entitiesToJson(req.entities);
                 if (formatting.length() > 0) body.put("entities", formatting);
                 putReplyTo(body, req.reply_to);
@@ -3405,13 +3539,18 @@ public class RestBridge {
                 rememberConversation(req.peer, sent);
 
                 TLRPC.TL_updateShortSentMessage update = new TLRPC.TL_updateShortSentMessage();
+                TLRPC.TL_messageMediaWebPage webMedia = req.no_webpage ? null : buildWebPageMedia(sent.optJSONObject("linkPreview"));
+                if (webMedia != null) {
+                    update.media = webMedia;
+                    savePeerMap("mediaMap", mediaUrlById);
+                }
                 update.id = idFromMongoIdInt32(sent.getString("_id"));
                 update.date = parseIsoToEpochSeconds(sent.optString("createdAt", null));
                 update.out = true;
                 update.entities = new ArrayList<>();
                 update.pts = 0;
                 update.pts_count = 0;
-                update.flags = 0;
+                update.flags = update.media != null ? TLObject.FLAG_9 : 0;
                 complete(onComplete, update, null);
             } catch (RestException e) {
                 complete(onComplete, null, restError(e.statusCode, e.message));
@@ -3801,6 +3940,8 @@ public class RestBridge {
                     }
                 }
 
+                applyBusinessInfo(full, userJson.optJSONObject("business"));
+
                 // Gifts tab only shows when the count is known to be > 0.
                 try {
                     JSONArray gifts = requestArray("GET", "/gifts/user/" + userJson.getString("_id"), null, true);
@@ -3863,6 +4004,10 @@ public class RestBridge {
     // messages.editMessage -> PUT /messages/:id
     // ---------------------------------------------------------------
     private void handleEditMessage(TLRPC.TL_messages_editMessage req, RequestDelegate onComplete) {
+        if (req.quick_reply_shortcut_id != 0) {
+            editQuickReplyMessage(req, onComplete);
+            return;
+        }
         executor.execute(() -> {
             try {
                 String mongoId = messageMongoIdByTlId.get(req.id);
@@ -3872,6 +4017,7 @@ public class RestBridge {
                 }
                 JSONObject body = new JSONObject();
                 body.put("text", req.message);
+                body.put("entities", entitiesToJson(req.entities));
                 JSONObject edited = request("PUT", "/messages/" + mongoId, body, true);
 
                 TLRPC.Peer peer = req.peer instanceof TLRPC.TL_inputPeerUser
@@ -4922,6 +5068,891 @@ public class RestBridge {
         });
     }
 
+    // ---------------------------------------------------------------
+    // Quick replies (Business): shortcuts with ready messages, kept on the
+    // server under /business/quick-replies. Shortcut and message ids are the
+    // server's small per-account counters.
+    // ---------------------------------------------------------------
+    private final ThreadLocal<JSONObject> quickReplyTarget = new ThreadLocal<>();
+
+    private boolean putSendTarget(JSONObject body, TLRPC.InputPeer peer) throws Exception {
+        JSONObject qr = quickReplyTarget.get();
+        if (qr != null) {
+            for (Iterator<String> it = qr.keys(); it.hasNext(); ) {
+                String k = it.next();
+                body.put(k, qr.get(k));
+            }
+            return true;
+        }
+        return putMessageTarget(body, peer);
+    }
+
+    private String sendPath() {
+        return quickReplyTarget.get() != null ? "/business/quick-replies/messages" : "/messages";
+    }
+
+    private TLRPC.TL_quickReply buildQuickReply(JSONObject q) {
+        TLRPC.TL_quickReply reply = new TLRPC.TL_quickReply();
+        reply.shortcut_id = q.optInt("shortcutId");
+        reply.shortcut = q.optString("shortcut", "");
+        reply.count = q.optInt("count");
+        JSONObject top = q.optJSONObject("top");
+        reply.top_message = top != null ? top.optInt("id") : 0;
+        return reply;
+    }
+
+    private TLRPC.TL_message buildQuickReplyMessage(JSONObject m, int shortcutId) throws Exception {
+        int id = m.optInt("id");
+        JSONObject j = new JSONObject(m.toString());
+        j.put("_id", String.format(Locale.US, "%024x", id));
+        j.put("sender", selfMongoId);
+        if (m.has("editedAt") && !m.isNull("editedAt")) {
+            j.put("isEdited", true);
+            j.put("updatedAt", m.optString("editedAt"));
+        }
+        TLRPC.TL_peerUser self = new TLRPC.TL_peerUser();
+        self.user_id = selfMongoId != null ? idFromMongoId(selfMongoId) : 0;
+        TLRPC.TL_message msg = buildTLMessage(j, self);
+        msg.id = id;
+        msg.out = true;
+        msg.unread = false;
+        msg.media_unread = false;
+        msg.quick_reply_shortcut_id = shortcutId;
+        msg.flags |= TLObject.FLAG_30;
+        return msg;
+    }
+
+    private void sendToQuickReply(TLRPC.InputQuickReplyShortcut shortcut, ArrayList<TLRPC.TL_inputSingleMedia> items, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject target = new JSONObject();
+                if (shortcut instanceof TLRPC.TL_inputQuickReplyShortcutId) {
+                    target.put("shortcutId", ((TLRPC.TL_inputQuickReplyShortcutId) shortcut).shortcut_id);
+                } else {
+                    target.put("shortcut", ((TLRPC.TL_inputQuickReplyShortcut) shortcut).shortcut);
+                }
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                JSONObject lastSummary = null;
+                for (TLRPC.TL_inputSingleMedia item : items) {
+                    JSONObject resp;
+                    if (item.media == null || item.media instanceof TLRPC.TL_inputMediaEmpty || item.media instanceof TLRPC.TL_inputMediaWebPage) {
+                        JSONObject body = new JSONObject(target.toString());
+                        body.put("type", "text");
+                        body.put("text", item.message == null ? "" : item.message);
+                        JSONArray formatting = entitiesToJson(item.entities);
+                        if (formatting.length() > 0) body.put("entities", formatting);
+                        resp = request("POST", "/business/quick-replies/messages", body, true);
+                    } else {
+                        quickReplyTarget.set(target);
+                        try {
+                            resp = sendOneMedia(null, item.media, item.message, null, item.entities);
+                        } finally {
+                            quickReplyTarget.remove();
+                        }
+                    }
+                    lastSummary = resp.getJSONObject("quickReply");
+                    int shortcutId = lastSummary.optInt("shortcutId");
+                    // Later items go to the (possibly just created) shortcut by id.
+                    target = new JSONObject();
+                    target.put("shortcutId", shortcutId);
+                    TLRPC.TL_message msg = buildQuickReplyMessage(resp.getJSONObject("message"), shortcutId);
+                    TL_update.TL_updateMessageID idUpdate = new TL_update.TL_updateMessageID();
+                    idUpdate.id = msg.id;
+                    idUpdate.random_id = item.random_id;
+                    updates.updates.add(idUpdate);
+                    TL_update.TL_updateQuickReplyMessage msgUpdate = new TL_update.TL_updateQuickReplyMessage();
+                    msgUpdate.message = msg;
+                    updates.updates.add(msgUpdate);
+                    updates.date = msg.date;
+                }
+                if (lastSummary != null) {
+                    TL_update.TL_updateNewQuickReply replyUpdate = new TL_update.TL_updateNewQuickReply();
+                    replyUpdate.quick_reply = buildQuickReply(lastSummary);
+                    updates.updates.add(replyUpdate);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                String text = e.message != null && e.message.matches("[A-Z_]+") ? e.message : "MESSAGE_EMPTY";
+                complete(onComplete, null, tlError(400, text));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void editQuickReplyMessage(TLRPC.TL_messages_editMessage req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("text", req.message == null ? "" : req.message);
+                body.put("entities", entitiesToJson(req.entities));
+                JSONObject resp = request("PUT", "/business/quick-replies/" + req.quick_reply_shortcut_id + "/messages/" + req.id, body, true);
+                TLRPC.TL_message msg = buildQuickReplyMessage(resp.getJSONObject("message"), req.quick_reply_shortcut_id);
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                TL_update.TL_updateQuickReplyMessage update = new TL_update.TL_updateQuickReplyMessage();
+                update.message = msg;
+                updates.updates.add(update);
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, tlError(400, "MESSAGE_ID_INVALID"));
+            }
+        });
+    }
+
+    private void handleGetQuickReplies(RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_quickReplies result = new TLRPC.TL_messages_quickReplies();
+            try {
+                JSONArray list = requestArray("GET", "/business/quick-replies", null, true);
+                for (int i = 0; i < list.length(); i++) {
+                    JSONObject q = list.getJSONObject(i);
+                    TLRPC.TL_quickReply reply = buildQuickReply(q);
+                    result.quick_replies.add(reply);
+                    JSONObject top = q.optJSONObject("top");
+                    if (top != null) result.messages.add(buildQuickReplyMessage(top, reply.shortcut_id));
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private void handleGetQuickReplyMessages(TLRPC.TL_messages_getQuickReplyMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_messages result = new TLRPC.TL_messages_messages();
+            try {
+                StringBuilder ids = new StringBuilder();
+                for (Integer id : req.id) {
+                    if (ids.length() > 0) ids.append(',');
+                    ids.append(id);
+                }
+                JSONObject resp = request("GET", "/business/quick-replies/" + req.shortcut_id + "/messages" + (ids.length() > 0 ? "?ids=" + ids : ""), null, true);
+                JSONArray msgs = resp.optJSONArray("messages");
+                for (int i = 0; msgs != null && i < msgs.length(); i++) {
+                    result.messages.add(0, buildQuickReplyMessage(msgs.getJSONObject(i), req.shortcut_id)); // newest first
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private void handleDeleteQuickReplyMessages(TLRPC.TL_messages_deleteQuickReplyMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            try {
+                JSONObject body = new JSONObject();
+                body.put("ids", new JSONArray(req.id));
+                JSONObject resp = request("POST", "/business/quick-replies/" + req.shortcut_id + "/messages/delete", body, true);
+                TL_update.TL_updateDeleteQuickReplyMessages update = new TL_update.TL_updateDeleteQuickReplyMessages();
+                update.shortcut_id = req.shortcut_id;
+                update.messages.addAll(req.id);
+                updates.updates.add(update);
+                if (resp.optBoolean("deleted", false)) {
+                    TL_update.TL_updateDeleteQuickReply gone = new TL_update.TL_updateDeleteQuickReply();
+                    gone.shortcut_id = req.shortcut_id;
+                    updates.updates.add(gone);
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            complete(onComplete, updates, null);
+        });
+    }
+
+    // messages.sendQuickReplyMessages: re-send the shortcut's messages into the chat
+    // through the normal send path (media is reused, not uploaded again).
+    private void handleSendQuickReplyMessages(TLRPC.TL_messages_sendQuickReplyMessages req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                StringBuilder ids = new StringBuilder();
+                for (Integer id : req.id) {
+                    if (ids.length() > 0) ids.append(',');
+                    ids.append(id);
+                }
+                JSONObject resp = request("GET", "/business/quick-replies/" + req.shortcut_id + "/messages" + (ids.length() > 0 ? "?ids=" + ids : ""), null, true);
+                JSONArray msgs = resp.optJSONArray("messages");
+                for (int i = 0; msgs != null && i < msgs.length(); i++) {
+                    JSONObject m = msgs.getJSONObject(i);
+                    JSONObject body = new JSONObject();
+                    if (!putMessageTarget(body, req.peer)) {
+                        complete(onComplete, null, tlError(400, "PEER_ID_INVALID"));
+                        return;
+                    }
+                    body.put("type", m.optString("type", "text"));
+                    if (!m.optString("text", "").isEmpty()) body.put("text", m.optString("text"));
+                    if (m.optJSONArray("entities") != null) body.put("entities", m.getJSONArray("entities"));
+                    if (!m.optString("fileUrl", "").isEmpty()) {
+                        body.put("existingFileUrl", m.optString("fileUrl"));
+                        if (!m.optString("fileName", "").isEmpty()) body.put("fileName", m.optString("fileName"));
+                    }
+                    if (m.optJSONObject("location") != null) body.put("location", m.getJSONObject("location"));
+                    if (m.opt("mediaMeta") != null) body.put("mediaMeta", m.opt("mediaMeta").toString());
+                    if (m.optBoolean("hasSpoiler", false)) body.put("hasSpoiler", true);
+                    JSONObject sent = request("POST", "/messages", body, true);
+                    rememberConversation(req.peer, sent);
+                }
+                // The messages arrive through the socket like any other sent message.
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void handleQuickReplyBoolCall(String method, String path, JSONObject body, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject resp = request(method, path, body, true);
+                boolean ok = !resp.has("ok") || resp.optBoolean("ok", true);
+                complete(onComplete, ok ? new TLRPC.TL_boolTrue() : new TLRPC.TL_boolFalse(), null);
+            } catch (RestException e) {
+                String text = e.message != null && e.message.matches("[A-Z_]+") ? e.message : "SHORTCUT_INVALID";
+                complete(onComplete, null, tlError(400, text));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Business profile: opening hours, location, intro, greeting & away
+    // messages -> PUT /business/settings
+    // ---------------------------------------------------------------
+    private JSONObject recipientsToJson(TL_account.TL_inputBusinessRecipients r) throws Exception {
+        JSONObject o = new JSONObject();
+        if (r == null) return o;
+        o.put("existingChats", r.existing_chats);
+        o.put("newChats", r.new_chats);
+        o.put("contacts", r.contacts);
+        o.put("nonContacts", r.non_contacts);
+        o.put("excludeSelected", r.exclude_selected);
+        JSONArray users = new JSONArray();
+        for (TLRPC.InputUser u : r.users) {
+            String mongo = userMongoIdByTlId.get(u.user_id);
+            if (mongo != null) users.put(mongo);
+        }
+        o.put("users", users);
+        return o;
+    }
+
+    private TL_account.TL_businessRecipients recipientsFromJson(JSONObject o) {
+        TL_account.TL_businessRecipients r = new TL_account.TL_businessRecipients();
+        if (o == null) return r;
+        r.existing_chats = o.optBoolean("existingChats");
+        r.new_chats = o.optBoolean("newChats");
+        r.contacts = o.optBoolean("contacts");
+        r.non_contacts = o.optBoolean("nonContacts");
+        r.exclude_selected = o.optBoolean("excludeSelected");
+        JSONArray users = o.optJSONArray("users");
+        for (int i = 0; users != null && i < users.length(); i++) {
+            r.users.add(idFromMongoId(users.optString(i)));
+        }
+        if (!r.users.isEmpty()) r.flags |= TLObject.FLAG_4;
+        return r;
+    }
+
+    private void handleBusinessSettings(TLObject request, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                if (request instanceof TL_account.updateBusinessWorkHours) {
+                    TL_account.TL_businessWorkHours h = ((TL_account.updateBusinessWorkHours) request).business_work_hours;
+                    if (h == null) {
+                        body.put("workHours", JSONObject.NULL);
+                    } else {
+                        JSONObject w = new JSONObject();
+                        w.put("timezone", h.timezone_id);
+                        JSONArray weekly = new JSONArray();
+                        for (TL_account.TL_businessWeeklyOpen o : h.weekly_open) {
+                            JSONObject p = new JSONObject();
+                            p.put("start", o.start_minute);
+                            p.put("end", o.end_minute);
+                            weekly.put(p);
+                        }
+                        w.put("weekly", weekly);
+                        body.put("workHours", w);
+                    }
+                } else if (request instanceof TL_account.updateBusinessLocation) {
+                    TL_account.updateBusinessLocation req = (TL_account.updateBusinessLocation) request;
+                    if (req.address == null || req.address.isEmpty()) {
+                        body.put("location", JSONObject.NULL);
+                    } else {
+                        JSONObject l = new JSONObject();
+                        l.put("address", req.address);
+                        if (req.geo_point instanceof TLRPC.TL_inputGeoPoint) {
+                            l.put("lat", req.geo_point.lat);
+                            l.put("lng", req.geo_point._long);
+                        }
+                        body.put("location", l);
+                    }
+                } else if (request instanceof TL_account.updateBusinessIntro) {
+                    TL_account.TL_inputBusinessIntro intro = ((TL_account.updateBusinessIntro) request).intro;
+                    if (intro == null) {
+                        body.put("intro", JSONObject.NULL);
+                    } else {
+                        JSONObject i = new JSONObject();
+                        i.put("title", intro.title == null ? "" : intro.title);
+                        i.put("description", intro.description == null ? "" : intro.description);
+                        if (intro.sticker != null) {
+                            String path = relativeUploadPath(mediaUrlById.get(intro.sticker.id));
+                            if (path != null) i.put("stickerUrl", path);
+                        }
+                        body.put("intro", i);
+                    }
+                } else if (request instanceof TL_account.updateBusinessGreetingMessage) {
+                    TL_account.TL_inputBusinessGreetingMessage g = ((TL_account.updateBusinessGreetingMessage) request).message;
+                    if (g == null) {
+                        body.put("greeting", JSONObject.NULL);
+                    } else {
+                        JSONObject o = new JSONObject();
+                        o.put("shortcutId", g.shortcut_id);
+                        o.put("noActivityDays", g.no_activity_days);
+                        o.put("recipients", recipientsToJson(g.recipients));
+                        body.put("greeting", o);
+                    }
+                } else if (request instanceof TL_account.updateBusinessAwayMessage) {
+                    TL_account.TL_inputBusinessAwayMessage a = ((TL_account.updateBusinessAwayMessage) request).message;
+                    if (a == null) {
+                        body.put("away", JSONObject.NULL);
+                    } else {
+                        JSONObject o = new JSONObject();
+                        o.put("shortcutId", a.shortcut_id);
+                        o.put("offlineOnly", a.offline_only);
+                        if (a.schedule instanceof TL_account.TL_businessAwayMessageScheduleOutsideWorkHours) {
+                            o.put("schedule", "outside_hours");
+                        } else if (a.schedule instanceof TL_account.TL_businessAwayMessageScheduleCustom) {
+                            o.put("schedule", "custom");
+                            o.put("start", ((TL_account.TL_businessAwayMessageScheduleCustom) a.schedule).start_date);
+                            o.put("end", ((TL_account.TL_businessAwayMessageScheduleCustom) a.schedule).end_date);
+                        } else {
+                            o.put("schedule", "always");
+                        }
+                        o.put("recipients", recipientsToJson(a.recipients));
+                        body.put("away", o);
+                    }
+                }
+                request("PUT", "/business/settings", body, true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(e.statusCode == 403 ? 403 : 400, e.statusCode == 403 ? "PREMIUM_ACCOUNT_REQUIRED" : "SHORTCUT_INVALID"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // userJson.business -> userFull.business_* (flags2 bits 0..4)
+    private void applyBusinessInfo(TLRPC.UserFull full, JSONObject b) {
+        if (b == null) return;
+        try {
+            JSONObject w = b.optJSONObject("workHours");
+            JSONArray weekly = w != null ? w.optJSONArray("weekly") : null;
+            if (weekly != null && weekly.length() > 0) {
+                TL_account.TL_businessWorkHours hours = new TL_account.TL_businessWorkHours();
+                hours.timezone_id = w.optString("timezone", "Asia/Tehran");
+                for (int i = 0; i < weekly.length(); i++) {
+                    JSONObject p = weekly.getJSONObject(i);
+                    TL_account.TL_businessWeeklyOpen open = new TL_account.TL_businessWeeklyOpen();
+                    open.start_minute = p.optInt("start");
+                    open.end_minute = p.optInt("end");
+                    hours.weekly_open.add(open);
+                }
+                full.business_work_hours = hours;
+                full.flags2 |= TLObject.FLAG_0;
+            }
+            JSONObject l = b.optJSONObject("location");
+            if (l != null && !l.optString("address", "").isEmpty()) {
+                TLRPC.TL_businessLocation loc = new TLRPC.TL_businessLocation();
+                loc.address = l.optString("address");
+                if (l.has("lat") && l.has("lng")) {
+                    TLRPC.TL_geoPoint geo = new TLRPC.TL_geoPoint();
+                    geo.lat = l.optDouble("lat");
+                    geo._long = l.optDouble("lng");
+                    loc.geo_point = geo;
+                    loc.flags |= TLObject.FLAG_0;
+                }
+                full.business_location = loc;
+                full.flags2 |= TLObject.FLAG_1;
+            }
+            JSONObject g = b.optJSONObject("greeting");
+            if (g != null && g.optInt("shortcutId") > 0) {
+                TL_account.TL_businessGreetingMessage greeting = new TL_account.TL_businessGreetingMessage();
+                greeting.shortcut_id = g.optInt("shortcutId");
+                greeting.no_activity_days = g.optInt("noActivityDays", 7);
+                greeting.recipients = recipientsFromJson(g.optJSONObject("recipients"));
+                full.business_greeting_message = greeting;
+                full.flags2 |= TLObject.FLAG_2;
+            }
+            JSONObject a = b.optJSONObject("away");
+            if (a != null && a.optInt("shortcutId") > 0) {
+                TL_account.TL_businessAwayMessage away = new TL_account.TL_businessAwayMessage();
+                away.shortcut_id = a.optInt("shortcutId");
+                away.offline_only = a.optBoolean("offlineOnly");
+                String schedule = a.optString("schedule", "always");
+                if ("outside_hours".equals(schedule)) {
+                    away.schedule = new TL_account.TL_businessAwayMessageScheduleOutsideWorkHours();
+                } else if ("custom".equals(schedule)) {
+                    TL_account.TL_businessAwayMessageScheduleCustom custom = new TL_account.TL_businessAwayMessageScheduleCustom();
+                    custom.start_date = a.optInt("start");
+                    custom.end_date = a.optInt("end");
+                    away.schedule = custom;
+                } else {
+                    away.schedule = new TL_account.TL_businessAwayMessageScheduleAlways();
+                }
+                away.recipients = recipientsFromJson(a.optJSONObject("recipients"));
+                full.business_away_message = away;
+                full.flags2 |= TLObject.FLAG_3;
+            }
+            JSONObject i = b.optJSONObject("intro");
+            if (i != null && (!i.optString("title", "").isEmpty() || !i.optString("description", "").isEmpty())) {
+                TL_account.TL_businessIntro intro = new TL_account.TL_businessIntro();
+                intro.title = i.optString("title", "");
+                intro.description = i.optString("description", "");
+                String sticker = i.optString("stickerUrl", "");
+                if (!sticker.isEmpty()) {
+                    intro.sticker = buildStickerDocument(absoluteUrl(sticker), null);
+                    intro.flags |= TLObject.FLAG_0;
+                }
+                full.business_intro = intro;
+                full.flags2 |= TLObject.FLAG_4;
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // help.getTimezonesList: the device's own timezone database.
+    private TLRPC.TL_help_timezonesList buildTimezones() {
+        TLRPC.TL_help_timezonesList list = new TLRPC.TL_help_timezonesList();
+        long now = System.currentTimeMillis();
+        for (String id : TimeZone.getAvailableIDs()) {
+            if (!id.contains("/") || id.startsWith("Etc/") || id.startsWith("SystemV/")) continue;
+            TLRPC.TL_timezone tz = new TLRPC.TL_timezone();
+            tz.id = id;
+            String city = id.substring(id.lastIndexOf('/') + 1).replace('_', ' ');
+            tz.name = city;
+            tz.utc_offset = TimeZone.getTimeZone(id).getOffset(now) / 1000;
+            list.timezones.add(tz);
+        }
+        list.hash = list.timezones.size();
+        return list;
+    }
+
+    // ---------------------------------------------------------------
+    // channels.getAdminLog -> GET /conversations/:id/admin-logs ("Recent actions")
+    // ---------------------------------------------------------------
+    private void handleGetAdminLog(TLRPC.TL_channels_getAdminLog req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_channels_adminLogResults result = new TLRPC.TL_channels_adminLogResults();
+            try {
+                String convId = req.channel != null ? conversationIdByChatPeer.get(req.channel.channel_id) : null;
+                if (convId == null || req.max_id != 0) {
+                    complete(onComplete, result, null); // everything comes in the first page
+                    return;
+                }
+                TLRPC.TL_peerChannel channelPeer = new TLRPC.TL_peerChannel();
+                channelPeer.channel_id = req.channel.channel_id;
+                java.util.HashSet<Long> adminFilter = new java.util.HashSet<>();
+                for (TLRPC.InputUser u : req.admins) {
+                    adminFilter.add(u instanceof TLRPC.TL_inputUserSelf && selfMongoId != null ? idFromMongoId(selfMongoId) : u.user_id);
+                }
+                String q = req.q != null ? req.q.trim().toLowerCase(Locale.US) : "";
+                TLRPC.TL_channelAdminLogEventsFilter f = req.events_filter;
+
+                JSONArray logs = requestArray("GET", "/conversations/" + convId + "/admin-logs", null, true);
+                java.util.HashSet<Long> seenUsers = new java.util.HashSet<>();
+                org.telegram.messenger.MessagesController controller = org.telegram.messenger.MessagesController.getInstance(currentAccount);
+                for (int i = 0; i < logs.length() && result.events.size() < 300; i++) {
+                    JSONObject log = logs.getJSONObject(i);
+                    JSONObject actor = log.optJSONObject("actor");
+                    if (actor == null || !actor.has("_id")) continue;
+                    JSONObject target = log.optJSONObject("targetUser");
+                    JSONObject data = log.optJSONObject("data");
+                    if (data == null) data = new JSONObject();
+                    String type = log.optString("actionType", "");
+                    String details = log.optString("details", "");
+                    long actorId = idFromMongoId(actor.getString("_id"));
+                    long targetId = target != null && target.has("_id") ? idFromMongoId(target.getString("_id")) : 0;
+                    if (!adminFilter.isEmpty() && !adminFilter.contains(actorId)) continue;
+                    if (!q.isEmpty()) {
+                        String hay = (details + " " + actor.optString("name", "") + " " + (target != null ? target.optString("name", "") : "")).toLowerCase(Locale.US);
+                        if (!hay.contains(q)) continue;
+                    }
+
+                    TLRPC.TL_channelAdminLogEvent event = new TLRPC.TL_channelAdminLogEvent();
+                    event.id = idFromMongoId(log.getString("_id"));
+                    event.date = parseIsoToEpochSeconds(log.optString("timestamp", null));
+                    event.user_id = actorId;
+                    boolean passes;
+                    switch (type) {
+                        case "member_joined": {
+                            if (targetId == 0 || targetId == actorId) {
+                                event.action = new TLRPC.TL_channelAdminLogEventActionParticipantJoin();
+                                passes = f == null || f.join;
+                            } else {
+                                TLRPC.TL_channelAdminLogEventActionParticipantInvite a = new TLRPC.TL_channelAdminLogEventActionParticipantInvite();
+                                a.participant = logParticipant(new TLRPC.TL_channelParticipant(), targetId, event.date);
+                                event.action = a;
+                                passes = f == null || f.invite;
+                            }
+                            break;
+                        }
+                        case "member_left":
+                            event.action = new TLRPC.TL_channelAdminLogEventActionParticipantLeave();
+                            passes = f == null || f.leave;
+                            break;
+                        case "member_kicked":
+                        case "member_banned":
+                        case "restriction_added":
+                        case "restriction_removed": {
+                            if (targetId == 0) continue;
+                            boolean removed = "restriction_removed".equals(type);
+                            boolean full = !"restriction_added".equals(type);
+                            TLRPC.TL_channelParticipantBanned banned = new TLRPC.TL_channelParticipantBanned();
+                            banned.left = full;
+                            banned.kicked_by = actorId;
+                            TLRPC.TL_chatBannedRights rights = new TLRPC.TL_chatBannedRights();
+                            if (full) {
+                                rights.view_messages = true;
+                            } else {
+                                rights.send_messages = true;
+                                rights.send_media = true;
+                            }
+                            rights.until_date = Integer.MAX_VALUE;
+                            banned.banned_rights = rights;
+                            TLRPC.TL_channelAdminLogEventActionParticipantToggleBan a = new TLRPC.TL_channelAdminLogEventActionParticipantToggleBan();
+                            TLRPC.ChannelParticipant member = logParticipant(new TLRPC.TL_channelParticipant(), targetId, event.date);
+                            TLRPC.ChannelParticipant restricted = logParticipant(banned, targetId, event.date);
+                            a.prev_participant = removed ? restricted : member;
+                            a.new_participant = removed ? member : restricted;
+                            event.action = a;
+                            passes = f == null || (removed ? (f.unban || f.unkick) : (f.ban || f.kick));
+                            break;
+                        }
+                        case "permission_change":
+                        case "ownership_transfer": {
+                            if (targetId == 0) continue;
+                            boolean owner = "ownership_transfer".equals(type);
+                            boolean promoted = owner || details.toLowerCase(Locale.US).contains("promot");
+                            TLRPC.TL_channelParticipantAdmin admin = new TLRPC.TL_channelParticipantAdmin();
+                            admin.admin_rights = fullAdminRights();
+                            admin.promoted_by = actorId;
+                            TLRPC.ChannelParticipant adminPart = logParticipant(admin, targetId, event.date);
+                            TLRPC.ChannelParticipant plain = owner ? adminPart : logParticipant(new TLRPC.TL_channelParticipant(), targetId, event.date);
+                            TLRPC.ChannelParticipant after;
+                            if (owner) {
+                                TLRPC.TL_channelParticipantCreator creator = new TLRPC.TL_channelParticipantCreator();
+                                creator.admin_rights = fullAdminRights();
+                                after = logParticipant(creator, targetId, event.date);
+                            } else {
+                                after = promoted ? adminPart : plain;
+                            }
+                            TLRPC.TL_channelAdminLogEventActionParticipantToggleAdmin a = new TLRPC.TL_channelAdminLogEventActionParticipantToggleAdmin();
+                            a.prev_participant = owner ? adminPart : (promoted ? plain : adminPart);
+                            a.new_participant = after;
+                            event.action = a;
+                            passes = f == null || (promoted ? f.promote : f.demote);
+                            break;
+                        }
+                        case "message_deleted": {
+                            JSONObject m = data.optJSONObject("message");
+                            if (m == null) {
+                                m = new JSONObject();
+                                m.put("_id", log.getString("_id"));
+                                m.put("text", details);
+                                m.put("type", "text");
+                                m.put("createdAt", log.optString("timestamp"));
+                            }
+                            m.put("conversationId", convId);
+                            if (!m.has("sender") && target != null) m.put("sender", target.getString("_id"));
+                            TLRPC.TL_channelAdminLogEventActionDeleteMessage a = new TLRPC.TL_channelAdminLogEventActionDeleteMessage();
+                            a.message = buildTLMessage(m, channelPeer);
+                            event.action = a;
+                            passes = f == null || f.delete;
+                            break;
+                        }
+                        case "message_edited": {
+                            String messageId = data.optString("messageId", "");
+                            if (messageId.isEmpty()) continue;
+                            JSONObject base = new JSONObject();
+                            base.put("_id", messageId);
+                            base.put("conversationId", convId);
+                            base.put("type", data.optString("type", "text"));
+                            base.put("createdAt", data.optString("createdAt", log.optString("timestamp")));
+                            if (target != null) base.put("sender", target.getString("_id"));
+                            JSONObject prev = new JSONObject(base.toString());
+                            prev.put("text", data.optString("prevText", ""));
+                            JSONObject now = new JSONObject(base.toString());
+                            now.put("text", data.optString("newText", ""));
+                            now.put("isEdited", true);
+                            now.put("updatedAt", log.optString("timestamp"));
+                            TLRPC.TL_channelAdminLogEventActionEditMessage a = new TLRPC.TL_channelAdminLogEventActionEditMessage();
+                            a.prev_message = buildTLMessage(prev, channelPeer);
+                            a.new_message = buildTLMessage(now, channelPeer);
+                            event.action = a;
+                            passes = f == null || f.edit;
+                            break;
+                        }
+                        case "message_pinned":
+                        case "message_unpinned": {
+                            String messageId = data.optString("messageId", "");
+                            JSONObject m = null;
+                            if (!messageId.isEmpty()) {
+                                try {
+                                    JSONArray found = requestArray("GET", "/messages/by-ids?ids=" + messageId, null, true);
+                                    if (found.length() > 0) m = found.getJSONObject(0);
+                                } catch (Exception ignore) {
+                                }
+                            }
+                            if (m == null) {
+                                m = new JSONObject();
+                                m.put("_id", messageId.isEmpty() ? log.getString("_id") : messageId);
+                                m.put("text", details);
+                                m.put("type", "text");
+                                m.put("createdAt", log.optString("timestamp"));
+                                m.put("sender", actor.getString("_id"));
+                            }
+                            m.put("conversationId", convId);
+                            TLRPC.TL_message pinnedMsg = buildTLMessage(m, channelPeer);
+                            pinnedMsg.pinned = "message_pinned".equals(type);
+                            TLRPC.TL_channelAdminLogEventActionUpdatePinned a = new TLRPC.TL_channelAdminLogEventActionUpdatePinned();
+                            a.message = pinnedMsg;
+                            event.action = a;
+                            passes = f == null || f.pinned;
+                            break;
+                        }
+                        case "join_request_approved": {
+                            if (targetId == 0) continue;
+                            TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
+                            invite.link = "https://7eve9craft.ir/";
+                            invite.admin_id = actorId;
+                            TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest a = new TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest();
+                            a.invite = invite;
+                            a.approved_by = actorId;
+                            event.user_id = targetId;
+                            event.action = a;
+                            passes = f == null || f.join || f.invites;
+                            break;
+                        }
+                        case "slow_mode_changed":
+                        case "slow_mode_updated": {
+                            TLRPC.TL_channelAdminLogEventActionToggleSlowMode a = new TLRPC.TL_channelAdminLogEventActionToggleSlowMode();
+                            a.prev_value = data.optInt("prev", 0);
+                            int parsed = 0;
+                            java.util.regex.Matcher mm = java.util.regex.Pattern.compile("(\\d+)").matcher(details);
+                            if (mm.find()) parsed = Integer.parseInt(mm.group(1));
+                            a.new_value = data.has("new") ? data.optInt("new", 0) : parsed;
+                            event.action = a;
+                            passes = f == null || f.settings;
+                            break;
+                        }
+                        case "title_changed": {
+                            TLRPC.TL_channelAdminLogEventActionChangeTitle a = new TLRPC.TL_channelAdminLogEventActionChangeTitle();
+                            a.prev_value = data.optString("prev", "");
+                            a.new_value = data.optString("new", "");
+                            event.action = a;
+                            passes = f == null || f.info;
+                            break;
+                        }
+                        case "about_changed": {
+                            TLRPC.TL_channelAdminLogEventActionChangeAbout a = new TLRPC.TL_channelAdminLogEventActionChangeAbout();
+                            a.prev_value = data.optString("prev", "");
+                            a.new_value = data.optString("new", "");
+                            event.action = a;
+                            passes = f == null || f.info;
+                            break;
+                        }
+                        case "username_changed": {
+                            TLRPC.TL_channelAdminLogEventActionChangeUsername a = new TLRPC.TL_channelAdminLogEventActionChangeUsername();
+                            a.prev_value = data.optString("prev", "");
+                            a.new_value = data.optString("new", "");
+                            event.action = a;
+                            passes = f == null || f.info;
+                            break;
+                        }
+                        case "photo_changed": {
+                            TLRPC.TL_channelAdminLogEventActionChangePhoto a = new TLRPC.TL_channelAdminLogEventActionChangePhoto();
+                            String prevUrl = data.optString("prev", "");
+                            String newUrl = data.optString("new", "");
+                            a.prev_photo = prevUrl.isEmpty() ? new TLRPC.TL_photoEmpty() : buildPhotoMedia(absoluteUrl(prevUrl)).photo;
+                            a.new_photo = newUrl.isEmpty() ? new TLRPC.TL_photoEmpty() : buildPhotoMedia(absoluteUrl(newUrl)).photo;
+                            event.action = a;
+                            passes = f == null || f.info;
+                            break;
+                        }
+                        case "permissions_changed": {
+                            TLRPC.TL_channelAdminLogEventActionDefaultBannedRights a = new TLRPC.TL_channelAdminLogEventActionDefaultBannedRights();
+                            a.prev_banned_rights = defaultBannedRights(data.optJSONObject("prev"));
+                            a.new_banned_rights = defaultBannedRights(data.optJSONObject("new"));
+                            event.action = a;
+                            passes = f == null || f.settings;
+                            break;
+                        }
+                        default:
+                            continue;
+                    }
+                    if (!passes || event.action == null) continue;
+                    result.events.add(event);
+                    addLogUser(result.users, seenUsers, actor, controller);
+                    if (target != null) addLogUser(result.users, seenUsers, target, controller);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // channels.editCreator -> PUT /conversations/:id/transfer-owner {newOwnerId}.
+    // There is no cloud password: the first call asks the UI to confirm
+    // (PASSWORD_HASH_INVALID), the confirmed retry carries srp_id 0x7e9c.
+    private void handleEditCreator(TLRPC.TL_channels_editCreator req, RequestDelegate onComplete) {
+        boolean confirmed = req.password instanceof TLRPC.TL_inputCheckPasswordSRP
+                && ((TLRPC.TL_inputCheckPasswordSRP) req.password).srp_id == 0x7e9c;
+        if (!confirmed) {
+            complete(onComplete, null, tlError(400, "PASSWORD_HASH_INVALID"));
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                String convId = req.channel != null ? conversationIdByChatPeer.get(req.channel.channel_id) : null;
+                String newOwner = req.user_id != null ? userMongoIdByTlId.get(req.user_id.user_id) : null;
+                if (convId == null || newOwner == null) {
+                    complete(onComplete, null, tlError(400, "USER_ID_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("newOwnerId", newOwner);
+                JSONObject conv = request("PUT", "/conversations/" + convId + "/transfer-owner", body, true);
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                addConversationChat(conv, updates.chats);
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(400, e.statusCode == 403 ? "CHAT_ADMIN_REQUIRED" : "USER_NOT_PARTICIPANT"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private static TLRPC.ChannelParticipant logParticipant(TLRPC.ChannelParticipant p, long userId, int date) {
+        TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+        peer.user_id = userId;
+        p.peer = peer;
+        p.date = date;
+        return p;
+    }
+
+    // Prefer the user we already know (full data) over the log's short copy.
+    private void addLogUser(ArrayList<TLRPC.User> users, java.util.HashSet<Long> seen, JSONObject json, org.telegram.messenger.MessagesController controller) {
+        try {
+            long id = idFromMongoId(json.getString("_id"));
+            if (!seen.add(id)) return;
+            TLRPC.User known = controller.getUser(id);
+            users.add(known != null ? known : buildTLUser(json, json.getString("_id").equals(selfMongoId)));
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // messages.getEmojiKeywords(Difference) -> GET /emoji-keywords/:lang?from=
+    private void handleEmojiKeywords(String langCode, int fromVersion, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_emojiKeywordsDifference result = new TLRPC.TL_emojiKeywordsDifference();
+            result.lang_code = langCode;
+            result.from_version = fromVersion;
+            result.version = Math.max(fromVersion, 1);
+            try {
+                String lang = langCode == null ? "en" : langCode;
+                JSONObject data = request("GET", "/emoji-keywords/" + java.net.URLEncoder.encode(lang, "UTF-8") + "?from=" + fromVersion, null, true);
+                result.lang_code = data.optString("langCode", lang);
+                result.version = data.optInt("version", result.version);
+                JSONArray keywords = data.optJSONArray("keywords");
+                if (keywords != null) {
+                    for (int i = 0; i < keywords.length(); i++) {
+                        JSONObject k = keywords.getJSONObject(i);
+                        JSONArray emoji = k.optJSONArray("e");
+                        if (emoji == null || emoji.length() == 0) continue;
+                        TLRPC.TL_emojiKeyword keyword = new TLRPC.TL_emojiKeyword();
+                        keyword.keyword = k.optString("k", "");
+                        for (int j = 0; j < emoji.length(); j++) keyword.emoticons.add(emoji.getString(j));
+                        result.keywords.add(keyword);
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // account.updateEmojiStatus -> PUT /auth/emoji-status {url, until}
+    private void handleUpdateEmojiStatus(TL_account.updateEmojiStatus req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                Long docId = org.telegram.messenger.UserObject.getEmojiStatusDocumentId(req.emoji_status);
+                String path = docId != null ? relativeUploadPath(mediaUrlById.get(docId)) : null;
+                if (path != null) {
+                    body.put("url", path);
+                    if (req.emoji_status.until > 0) body.put("until", req.emoji_status.until);
+                }
+                request("PUT", "/auth/emoji-status", body, true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(e.statusCode == 403 ? 403 : 400, e.statusCode == 403 ? "PREMIUM_ACCOUNT_REQUIRED" : "EMOJI_INVALID"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Default statuses offered in the picker: the first emoji of each premium emoji pack.
+    private void handleDefaultEmojiStatuses(RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TL_account.TL_emojiStatuses result = new TL_account.TL_emojiStatuses();
+            try {
+                JSONArray sets = requestArray("GET", "/stickers/sets", null, true);
+                for (int i = 0; i < sets.length() && result.statuses.size() < 16; i++) {
+                    JSONArray stickers = requestArray("GET", "/stickers?setId=" + sets.getJSONObject(i).getString("_id"), null, true);
+                    for (int j = 0; j < stickers.length() && j < 4 && result.statuses.size() < 16; j++) {
+                        String url = jsonStr(stickers.getJSONObject(j), "url");
+                        if (url == null || url.isEmpty()) continue;
+                        TLRPC.TL_emojiStatus status = new TLRPC.TL_emojiStatus();
+                        status.document_id = idForUrl(absoluteUrl(url));
+                        result.statuses.add(status);
+                    }
+                }
+                result.hash = result.statuses.size();
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
     private TLRPC.TL_document buildStickerDocument(String url, TLRPC.TL_stickerSet set) {
         if (set != null && emojiSetIds.contains(set.id)) {
             set.emojis = true;
@@ -5347,17 +6378,28 @@ public class RestBridge {
                     JSONObject g = gifts.getJSONObject(i);
                     if (!g.optBoolean("isVisibleInProfile", true)) continue;
 
-                    String pictureUrl = g.optString("thumbnailUrl", null);
-                    if (pictureUrl == null || pictureUrl.isEmpty()) {
-                        pictureUrl = g.optString("animationUrl", null);
+                    // Prefer the Lottie animation, fall back to the static picture.
+                    String pictureUrl = g.optString("animationUrl", "");
+                    String lower = pictureUrl.toLowerCase(Locale.US);
+                    boolean lottie = lower.endsWith(".json") || lower.endsWith(".tgs");
+                    if (!lottie) {
+                        pictureUrl = g.optString("thumbnailUrl", "");
+                        if (pictureUrl.isEmpty()) pictureUrl = g.optString("animationUrl", "");
+                        lower = pictureUrl.toLowerCase(Locale.US);
+                        lottie = lower.endsWith(".json") || lower.endsWith(".tgs");
                     }
-                    if (pictureUrl == null || pictureUrl.isEmpty()) {
+                    if (pictureUrl.isEmpty()) {
                         continue; // no visual for this gift - skip rather than render broken
                     }
+                    String giftMime = lottie ? "application/x-tgsticker"
+                            : lower.endsWith(".png") ? "image/png"
+                            : (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) ? "image/jpeg"
+                            : "image/webp";
+                    String giftFile = lottie ? "gift.tgs" : "gift" + (lower.lastIndexOf('.') >= 0 ? lower.substring(lower.lastIndexOf('.')) : ".webp");
 
                     TL_stars.TL_starGift starGift = new TL_stars.TL_starGift();
                     starGift.id = idFromMongoId(g.getString("_id"));
-                    starGift.sticker = buildDocumentMedia(absoluteUrl(pictureUrl), "image/webp", null, "sticker").document;
+                    starGift.sticker = buildDocumentMedia(absoluteUrl(pictureUrl), giftMime, giftFile, "sticker").document;
                     try {
                         starGift.stars = Long.parseLong(g.optString("displayValue", "0").replaceAll("[^0-9]", ""));
                     } catch (NumberFormatException ignore) {
@@ -6347,6 +7389,14 @@ public class RestBridge {
             }
         }
 
+        if (msg.media == null) {
+            TLRPC.TL_messageMediaWebPage webMedia = buildWebPageMedia(m.optJSONObject("linkPreview"));
+            if (webMedia != null) {
+                msg.media = webMedia;
+                msg.flags |= TLObject.FLAG_9;
+            }
+        }
+
         if (m.optInt("ttlPeriod", 0) > 0) {
             msg.ttl_period = m.optInt("ttlPeriod", 0);
             msg.flags |= TLObject.FLAG_25;
@@ -6451,6 +7501,14 @@ public class RestBridge {
                         return;
                     }
                     byte[] data = readAllBytes(conn.getInputStream());
+                    if (code == 200 && (req.offset > 0 || data.length > req.limit)) {
+                        // Server ignored Range and sent the whole file: cut the asked chunk.
+                        int from = (int) Math.min(req.offset, data.length);
+                        int to = (int) Math.min((long) data.length, req.offset + (long) req.limit);
+                        byte[] part = new byte[to - from];
+                        System.arraycopy(data, from, part, 0, part.length);
+                        data = part;
+                    }
 
                     TLRPC.TL_upload_file file = new TLRPC.TL_upload_file();
                     file.type = new TLRPC.TL_storage_fileUnknown();
@@ -6550,6 +7608,75 @@ public class RestBridge {
                 ps.h = meta.optInt("height", 0);
             }
         }
+    }
+
+    // Server linkPreview {url,title,description,image,siteName} -> link card
+    private TLRPC.TL_messageMediaWebPage buildWebPageMedia(JSONObject lp) {
+        String url = lp != null ? jsonStr(lp, "url") : null;
+        if (url == null || url.isEmpty()) return null;
+        TLRPC.TL_webPage page = new TLRPC.TL_webPage();
+        page.id = idForUrl("webpage:" + url) ^ 0x2000000000000000L;
+        page.url = url;
+        String display = url.replaceFirst("^https?://", "");
+        if (display.startsWith("www.")) display = display.substring(4);
+        if (display.endsWith("/")) display = display.substring(0, display.length() - 1);
+        page.display_url = display;
+        page.hash = 0;
+        page.type = "article";
+        page.flags |= TLObject.FLAG_0;
+        String site = jsonStr(lp, "siteName");
+        if (site == null || site.isEmpty()) {
+            try {
+                site = new URL(url).getHost().replaceFirst("^www\\.", "");
+            } catch (Exception ignore) {
+                site = null;
+            }
+        }
+        if (site != null && !site.isEmpty()) {
+            page.site_name = site;
+            page.flags |= TLObject.FLAG_1;
+        }
+        String title = jsonStr(lp, "title");
+        if (title != null && !title.isEmpty()) {
+            page.title = title;
+            page.flags |= TLObject.FLAG_2;
+        }
+        String description = jsonStr(lp, "description");
+        if (description != null && !description.isEmpty()) {
+            page.description = description;
+            page.flags |= TLObject.FLAG_3;
+        }
+        String image = jsonStr(lp, "image");
+        if (image != null && !image.isEmpty()) {
+            page.photo = buildPhotoMedia(absoluteUrl(image)).photo;
+            page.flags |= TLObject.FLAG_4;
+        }
+        TLRPC.TL_messageMediaWebPage media = new TLRPC.TL_messageMediaWebPage();
+        media.webpage = page;
+        return media;
+    }
+
+    // account.getWebPagePreview -> POST /messages/link-preview (card while typing)
+    private void handleGetWebPagePreview(TL_account.getWebPagePreview req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TL_account.webPagePreview result = new TL_account.webPagePreview();
+            try {
+                JSONObject body = new JSONObject();
+                body.put("text", req.message == null ? "" : req.message);
+                JSONObject lp = request("POST", "/messages/link-preview", body, true);
+                TLRPC.TL_messageMediaWebPage media = buildWebPageMedia(lp);
+                if (media != null) {
+                    result.media = media;
+                    savePeerMap("mediaMap", mediaUrlById);
+                } else {
+                    result.media = new TLRPC.TL_messageMediaEmpty();
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+                result.media = new TLRPC.TL_messageMediaEmpty();
+            }
+            complete(onComplete, result, null);
+        });
     }
 
     private TLRPC.TL_messageMediaPhoto buildPhotoMedia(String url) {
@@ -7037,6 +8164,20 @@ public class RestBridge {
         }
 
         applyUserStatus(user, u, self);
+
+        JSONObject emojiStatus = u.optJSONObject("emojiStatus");
+        String emojiUrl = emojiStatus != null ? jsonStr(emojiStatus, "url") : null;
+        if (emojiUrl != null && !emojiUrl.isEmpty()) {
+            TLRPC.TL_emojiStatus status = new TLRPC.TL_emojiStatus();
+            status.document_id = idForUrl(absoluteUrl(emojiUrl));
+            int until = emojiStatus.optInt("until", 0);
+            if (until > 0) {
+                status.until = until;
+                status.flags |= 1;
+            }
+            user.emoji_status = status;
+            user.flags |= TLObject.FLAG_30;
+        }
 
         TLRPC.PeerColor nameColor = peerColorFromJson(u.optJSONObject("nameColor"));
         if (nameColor != null) {

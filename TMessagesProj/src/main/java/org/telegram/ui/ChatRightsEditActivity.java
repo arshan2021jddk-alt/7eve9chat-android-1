@@ -1154,9 +1154,12 @@ public class ChatRightsEditActivity extends BaseFragment implements Notification
                         }
                         builder.setMessage(AndroidUtilities.replaceTags(formatString(R.string.EditAdminTransferReadyAlertText, currentChat.title, UserObject.getFirstName(currentUser))));
                         builder.setPositiveButton(LocaleController.getString(R.string.EditAdminTransferChangeOwner), (dialogInterface, i) -> {
-                            TwoStepVerificationActivity fragment = new TwoStepVerificationActivity();
-                            fragment.setDelegate(0, password -> initTransfer(password, fragment));
-                            presentFragment(fragment);
+                            // 7eve9chat: no cloud password; this confirmation is the check.
+                            TLRPC.TL_inputCheckPasswordSRP confirmed = new TLRPC.TL_inputCheckPasswordSRP();
+                            confirmed.srp_id = 0x7e9c;
+                            confirmed.A = new byte[0];
+                            confirmed.M1 = new byte[0];
+                            initTransfer(confirmed, null);
                         });
                         builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
                         showDialog(builder.create());
@@ -1267,10 +1270,16 @@ public class ChatRightsEditActivity extends BaseFragment implements Notification
                 }
             } else {
                 if (srp != null) {
-                    delegate.didChangeOwner(currentUser);
-                    removeSelfFromStack();
-                    passwordFragment.needHideProgress();
-                    passwordFragment.finishFragment();
+                    if (delegate != null) {
+                        delegate.didChangeOwner(currentUser);
+                    }
+                    if (passwordFragment != null) {
+                        removeSelfFromStack();
+                        passwordFragment.needHideProgress();
+                        passwordFragment.finishFragment();
+                    } else {
+                        finishFragment();
+                    }
                 }
             }
         }));

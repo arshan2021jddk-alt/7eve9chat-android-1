@@ -499,7 +499,31 @@ public class SocketBridge {
             }
             RestBridge rest = RestBridge.getInstance(currentAccount);
             TLRPC.TL_updates updates = new TLRPC.TL_updates();
-            updates.users.add(rest.buildTLUser(userJson, userJson.getString("_id").equals(rest.getSelfMongoId())));
+            TLRPC.User fresh = rest.buildTLUser(userJson, userJson.getString("_id").equals(rest.getSelfMongoId()));
+            // Partial payloads (e.g. an emoji status change) must not wipe what we already know.
+            TLRPC.User known = MessagesController.getInstance(currentAccount).getUser(fresh.id);
+            if (known != null) {
+                if (fresh.phone == null && known.phone != null) {
+                    fresh.phone = known.phone;
+                    fresh.flags |= TLObject.FLAG_4;
+                }
+                if (!userJson.has("isOnline") && !userJson.has("lastSeen") && known.status != null) {
+                    fresh.status = known.status;
+                    fresh.flags |= TLObject.FLAG_6;
+                }
+                if (!userJson.has("username") && known.username != null) {
+                    fresh.username = known.username;
+                    fresh.usernames = known.usernames;
+                    fresh.flags |= TLObject.FLAG_3;
+                    if (!fresh.usernames.isEmpty()) fresh.flags2 |= TLObject.FLAG_0;
+                }
+                if (!userJson.has("about") && known.bot) {
+                    fresh.bot_info_version = known.bot_info_version;
+                }
+                fresh.contact = known.contact || fresh.contact;
+                fresh.mutual_contact = known.mutual_contact;
+            }
+            updates.users.add(fresh);
             updates.date = (int) (System.currentTimeMillis() / 1000L);
             deliver(updates);
             org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
