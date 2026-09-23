@@ -710,17 +710,10 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         rowCount = 0;
 
         securitySectionRow = rowCount++;
-        passwordRow = rowCount++;
+        passwordRow = -1; // 7eve9chat: no cloud password (2FA), passkeys or login email
         autoDeleteMesages = rowCount++;
         passcodeRow = rowCount++;
-        if (getMessagesController().config.settingsDisplayPasskeys.get() && Build.VERSION.SDK_INT >= 28 && BuildVars.SUPPORTS_PASSKEYS) {
-            passkeysRow = rowCount++;
-        }
-        if (currentPassword != null ? currentPassword.login_email_pattern != null : SharedConfig.hasEmailLogin) {
-            emailLoginRow = rowCount++;
-        } else {
-            emailLoginRow = -1;
-        }
+        emailLoginRow = -1;
         blockedRow = rowCount++;
         if (currentPassword != null) {
             boolean hasEmail = currentPassword.login_email_pattern != null;

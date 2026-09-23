@@ -90,6 +90,7 @@ public final class BulletinFactory {
 
     public Bulletin makeForError(TLRPC.TL_error error) {
         if (!LaunchActivity.isActive) return new Bulletin.EmptyBulletin();
+        if (error != null && error.code == 406) return new Bulletin.EmptyBulletin();
         if (error == null) {
             return createErrorBulletin(LocaleController.formatString(R.string.UnknownError));
         } else {
@@ -232,6 +233,9 @@ public final class BulletinFactory {
     }
 
     public Bulletin createSimpleBulletin(int iconRawId, CharSequence text) {
+        if (org.telegram.tgnet.RestBridge.isSilentErrorText(text)) {
+            return new Bulletin.EmptyBulletin();
+        }
         return createSimpleBulletinWithIconSize(iconRawId, text, 36);
     }
 
@@ -927,6 +931,9 @@ public final class BulletinFactory {
     }
 
     public Bulletin createErrorBulletin(CharSequence errorMessage, Theme.ResourcesProvider resourcesProvider) {
+        if (org.telegram.tgnet.RestBridge.isSilentErrorText(errorMessage)) {
+            return new Bulletin.EmptyBulletin(); // 7eve9chat: no black bars for backend gaps
+        }
         Bulletin.LottieLayout layout = new Bulletin.LottieLayout(getContext(), resourcesProvider);
         layout.setAnimation(R.raw.chats_infotip);
         layout.textView.setText(errorMessage);

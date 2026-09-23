@@ -518,7 +518,7 @@ public class ChatThemeBottomSheet extends BottomSheet implements NotificationCen
 
                 @Override
                 public void onError(TLRPC.TL_error error) {
-                    Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
+                    if (!org.telegram.tgnet.RestBridge.isSilentErrorText(error.text)) Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
                 }
             }, false);
         } else {
@@ -537,7 +537,7 @@ public class ChatThemeBottomSheet extends BottomSheet implements NotificationCen
 
                 @Override
                 public void onError(TLRPC.TL_error error) {
-                    Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
+                    if (!org.telegram.tgnet.RestBridge.isSilentErrorText(error.text)) Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
                 }
             });
         }

@@ -537,7 +537,7 @@ public class AlertsCreator {
             }
         } else if (request instanceof TLRPC.TL_messages_getAttachedStickers) {
             if (fragment != null && fragment.getParentActivity() != null) {
-                Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.ErrorOccurred) + "\n" + error.text, Toast.LENGTH_SHORT).show();
+                if (!org.telegram.tgnet.RestBridge.isSilentErrorText(error.text)) Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.ErrorOccurred) + "\n" + error.text, Toast.LENGTH_SHORT).show();
             }
         } else if (request instanceof TL_account.confirmPhone || request instanceof TL_account.verifyPhone || request instanceof TL_account.verifyEmail) {
             if (error.text.contains("PHONE_CODE_EMPTY") || error.text.contains("PHONE_CODE_INVALID") || error.text.contains("CODE_INVALID") || error.text.contains("CODE_EMPTY")) {
@@ -654,7 +654,7 @@ public class AlertsCreator {
     }
 
     public static Toast showSimpleToast(BaseFragment baseFragment, final String text) {
-        if (text == null) {
+        if (text == null || org.telegram.tgnet.RestBridge.isSilentErrorText(text)) {
             return null;
         }
         Context context;
@@ -1173,7 +1173,7 @@ public class AlertsCreator {
         if (baseFragment == null) {
             baseFragment = LaunchActivity.getSafeLastFragment();
         }
-        if (text == null || baseFragment == null || baseFragment.getParentActivity() == null) {
+        if (text == null || baseFragment == null || baseFragment.getParentActivity() == null || org.telegram.tgnet.RestBridge.isSilentErrorText(text)) {
             return null;
         }
         AlertDialog.Builder builder = createSimpleAlert(baseFragment.getParentActivity(), title, text, resourcesProvider);

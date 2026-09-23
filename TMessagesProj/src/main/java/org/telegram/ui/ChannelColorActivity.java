@@ -1874,7 +1874,7 @@ public class ChannelColorActivity extends BaseFragment implements NotificationCe
 
                 @Override
                 public void onError(TLRPC.TL_error error) {
-                    Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
+                    if (!org.telegram.tgnet.RestBridge.isSilentErrorText(error.text)) Toast.makeText(getContext(), error.text, Toast.LENGTH_SHORT).show();
                 }
             }, true);
 

@@ -69,7 +69,7 @@ public class BoostDialogs {
 
     public static void showToastError(Context context, TLRPC.TL_error error) {
         if (error != null && error.text != null && !TextUtils.isEmpty(error.text)) {
-            Toast.makeText(context, error.text, Toast.LENGTH_LONG).show();
+            if (!org.telegram.tgnet.RestBridge.isSilentErrorText(error.text)) Toast.makeText(context, error.text, Toast.LENGTH_LONG).show();
         }
     }
 
