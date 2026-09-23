@@ -10,6 +10,7 @@ import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_account;
+import org.telegram.tgnet.tl.TL_bots;
 import org.telegram.tgnet.tl.TL_keyboard;
 import org.telegram.tgnet.tl.TL_stars;
 import org.telegram.tgnet.tl.TL_stories;
@@ -86,7 +87,7 @@ public class RestBridge {
     // auth.sendCode doesn't map cleanly to our OTP backend (which has no
     // phone_code_hash concept), so we mint one locally and remember which
     // phone number it belongs to for the follow-up auth.signIn call.
-    private final HashMap<String, String> pendingPhoneByHash = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, String> pendingPhoneByHash = new java.util.concurrent.ConcurrentHashMap<>();
 
     private volatile String selfMongoId;
 
@@ -94,44 +95,51 @@ public class RestBridge {
     // conversations by Mongo ObjectId. These maps (persisted so they survive
     // process restarts) let handleGetHistory/handleSendMessage recover the
     // right conversation id from the TL peer the UI is asking about.
-    private final HashMap<Long, String> conversationIdByUserPeer = new HashMap<>();
-    private final HashMap<Long, String> conversationIdByChatPeer = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> conversationIdByUserPeer = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> conversationIdByChatPeer = new java.util.concurrent.ConcurrentHashMap<>();
 
     // TL photo/document ids -> the backend URL they actually point to, so
     // upload.getFile can serve real bytes for chat media, avatars and stories.
-    private final HashMap<Long, String> mediaUrlById = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> mediaUrlById = new java.util.concurrent.ConcurrentHashMap<>();
 
     // Backend history is page/limit based, not id-cursor based like Telegram's
     // real protocol - this tracks how many messages we've already handed out
     // per conversation so "load older messages" (offset_id != 0) can resolve
     // to the right backend page. Not persisted: resets on process restart,
     // which just means the next scroll-up re-starts from the newest page.
-    private final HashMap<String, Integer> historyLoadedCount = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> historyLoadedCount = new java.util.concurrent.ConcurrentHashMap<>();
 
     // TL_authorization.hash -> backend deviceId, so resetAuthorization (the
     // "terminate session" button) knows which device to remove.
-    private final HashMap<Long, String> sessionHashToDeviceId = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> sessionHashToDeviceId = new java.util.concurrent.ConcurrentHashMap<>();
 
     // TL numeric user id -> Mongo user id, populated every time buildTLUser()
     // constructs a user, so anything that only has the TL id (e.g. opening a
     // full profile from a chat) can still call backend endpoints keyed by
     // Mongo id.
-    private final HashMap<Long, String> userMongoIdByTlId = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> userMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+    // channel TL id -> linked discussion group (or, for a discussion group,
+    // its channel) Mongo id
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> linkedChatMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+    // channel post TL id -> its comment-thread anchor Mongo id
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> anchorMongoIdByPostTlId = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<Integer, String> storyMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String, String> myReactionByMessage = new java.util.concurrent.ConcurrentHashMap<>();
     // Channel (broadcast) TL ids, so realtime events for them are routed as
     // channel peers rather than basic-group peers.
     private final java.util.Set<Long> channelTlIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> gameShortNameByMsg = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<Long> broadcastTlIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
     // TL int32 message id -> Mongo message id. idFromMongoIdInt32() is a
     // one-way hash (last 28 bits of the ObjectId), so edit/delete/react need
     // this map (populated by buildTLMessage()) to recover the real id.
-    private final HashMap<Integer, String> messageMongoIdByTlId = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> messageMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
 
     // TL sticker set id -> Mongo StickerSet id, populated by
     // handleGetAllStickers() so handleGetStickerSet() can resolve which set
     // the UI is actually asking to open.
-    private final HashMap<Long, String> stickerSetMongoIdById = new HashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> stickerSetMongoIdById = new java.util.concurrent.ConcurrentHashMap<>();
 
     private RestBridge(int account) {
         currentAccount = account;
@@ -143,7 +151,7 @@ public class RestBridge {
         buildAvailableReactions();
     }
 
-    private static void loadPeerMap(String json, HashMap<Long, String> target) {
+    private static void loadPeerMap(String json, Map<Long, String> target) {
         if (json == null) return;
         try {
             JSONObject obj = new JSONObject(json);
@@ -156,7 +164,7 @@ public class RestBridge {
         }
     }
 
-    private void savePeerMap(String prefKey, HashMap<Long, String> map) {
+    private void savePeerMap(String prefKey, Map<Long, String> map) {
         try {
             JSONObject obj = new JSONObject();
             for (Map.Entry<Long, String> e : map.entrySet()) {
@@ -324,6 +332,14 @@ public class RestBridge {
         TLRPC.TL_messageReactions built = buildMessageReactions(reactions);
         update.reactions = built != null ? built : new TLRPC.TL_messageReactions();
         return update;
+    }
+
+    void buildConversationChat(JSONObject conv, ArrayList<TLRPC.Chat> out) {
+        addConversationChat(conv, out);
+    }
+
+    void rememberMessageId(String mongoId) {
+        messageMongoIdByTlId.put(idFromMongoIdInt32(mongoId), mongoId);
     }
 
     void joinConversationRoom(String conversationId) {
@@ -725,6 +741,106 @@ public class RestBridge {
             if (request instanceof TLRPC.TL_messages_editChatPhoto) {
                 TLRPC.TL_messages_editChatPhoto req = (TLRPC.TL_messages_editChatPhoto) request;
                 handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_inviteToChannel) {
+                handleInviteToChannel((TLRPC.TL_channels_inviteToChannel) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_editAdmin) {
+                handleChannelEditAdmin((TLRPC.TL_channels_editAdmin) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_deleteChannel) {
+                handleSimpleConversationCall(((TLRPC.TL_channels_deleteChannel) request).channel.channel_id, "DELETE", "", null, new TLRPC.TL_updates(), onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_readHistory) {
+                handleSimpleConversationCall(((TLRPC.TL_channels_readHistory) request).channel.channel_id, "POST", "/read", new JSONObject(), new TLRPC.TL_boolTrue(), onComplete, "/messages/conversations/");
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_getParticipant) {
+                handleGetParticipant((TLRPC.TL_channels_getParticipant) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_editChatAbout) {
+                TLRPC.TL_messages_editChatAbout req = (TLRPC.TL_messages_editChatAbout) request;
+                JSONObject body = new JSONObject();
+                body.put("description", req.about == null ? "" : req.about);
+                long tlId = req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id;
+                handleSimpleConversationCall(tlId, "PUT", "", body, new TLRPC.TL_boolTrue(), onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_toggleSignatures) {
+                handleSimpleConversationCall(((TLRPC.TL_channels_toggleSignatures) request).channel.channel_id, "PUT", "/toggle-signatures", new JSONObject(), new TLRPC.TL_updates(), onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getPeerSettings) {
+                TLRPC.TL_messages_peerSettings settings = new TLRPC.TL_messages_peerSettings();
+                settings.settings = new TLRPC.TL_peerSettings();
+                complete(onComplete, settings, null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getOnlines) {
+                complete(onComplete, new TLRPC.TL_chatOnlines(), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_readMessageContents) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_readMessageContents) {
+                complete(onComplete, new TLRPC.TL_messages_affectedMessages(), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_getAdminedPublicChannels) {
+                handleGetAdminedPublicChannels(onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getMessages) {
+                handleGetMessagesByIds(((TLRPC.TL_messages_getMessages) request).id, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_getMessages) {
+                handleGetMessagesByIds(((TLRPC.TL_channels_getMessages) request).id, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_search) {
+                TLRPC.TL_messages_search req = (TLRPC.TL_messages_search) request;
+                handleSearch(req.peer, req.q, req.filter, req.offset_id, req.limit, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_searchGlobal) {
+                TLRPC.TL_messages_searchGlobal req = (TLRPC.TL_messages_searchGlobal) request;
+                handleSearch(null, req.q, req.filter, req.offset_id, req.limit, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getSearchCounters) {
+                handleSearchCounters((TLRPC.TL_messages_getSearchCounters) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getDiscussionMessage) {
+                handleGetDiscussionMessage((TLRPC.TL_messages_getDiscussionMessage) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getReplies) {
+                handleGetReplies((TLRPC.TL_messages_getReplies) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getMessagesViews) {
+                handleGetMessagesViews((TLRPC.TL_messages_getMessagesViews) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_getSavedMusic) {
+                handleGetSavedMusic((TLRPC.TL_getSavedMusic) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_photos_getUserPhotos) {
+                handleGetUserPhotos((TLRPC.TL_photos_getUserPhotos) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getGameHighScores) {
+                handleGetGameHighScores((TLRPC.TL_messages_getGameHighScores) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getAvailableReactions) {
@@ -1508,6 +1624,585 @@ public class RestBridge {
     // "file" + conversationId/receiverId + text caption)
     // ---------------------------------------------------------------
     // ---------------------------------------------------------------
+    // Group/channel management (supergroup + channel methods)
+    // ---------------------------------------------------------------
+    private void handleSimpleConversationCall(long chatTlId, String method, String suffix, JSONObject body, TLObject okResponse, RequestDelegate onComplete) {
+        handleSimpleConversationCall(chatTlId, method, suffix, body, okResponse, onComplete, "/conversations/");
+    }
+
+    private void handleSimpleConversationCall(long chatTlId, String method, String suffix, JSONObject body, TLObject okResponse, RequestDelegate onComplete, String prefix) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(chatTlId);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(400, "CHANNEL_INVALID"));
+                    return;
+                }
+                request(method, prefix + convId + suffix, body, true);
+                complete(onComplete, okResponse, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // channels.inviteToChannel -> POST /conversations/:id/members {userId} (each)
+    private void handleInviteToChannel(TLRPC.TL_channels_inviteToChannel req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(400, "CHANNEL_INVALID"));
+                    return;
+                }
+                for (TLRPC.InputUser u : req.users) {
+                    String memberMongoId = userMongoIdByTlId.get(u.user_id);
+                    if (memberMongoId == null) continue;
+                    JSONObject body = new JSONObject();
+                    body.put("userId", memberMongoId);
+                    try {
+                        request("POST", "/conversations/" + convId + "/members", body, true);
+                    } catch (RestException e) {
+                        FileLog.e(e);
+                    }
+                }
+                TLRPC.TL_messages_invitedUsers result = new TLRPC.TL_messages_invitedUsers();
+                result.updates = new TLRPC.TL_updates();
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // channels.editAdmin -> PUT /conversations/:id/admins {userId, isAdmin}
+    private void handleChannelEditAdmin(TLRPC.TL_channels_editAdmin req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                String memberMongoId = userMongoIdByTlId.get(req.user_id.user_id);
+                if (convId == null || memberMongoId == null) {
+                    complete(onComplete, null, tlError(400, "USER_ID_INVALID"));
+                    return;
+                }
+                TLRPC.TL_chatAdminRights r = req.admin_rights;
+                boolean makeAdmin = r != null && (r.change_info || r.post_messages || r.edit_messages || r.delete_messages
+                        || r.ban_users || r.invite_users || r.pin_messages || r.add_admins || r.manage_call || r.other);
+                JSONObject body = new JSONObject();
+                body.put("userId", memberMongoId);
+                body.put("isAdmin", makeAdmin);
+                request("PUT", "/conversations/" + convId + "/admins", body, true);
+                if (req.rank != null && !req.rank.isEmpty()) {
+                    try {
+                        JSONObject titleBody = new JSONObject();
+                        titleBody.put("userId", memberMongoId);
+                        titleBody.put("title", req.rank);
+                        request("PUT", "/conversations/" + convId + "/custom-title", titleBody, true);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                }
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // channels.getParticipant -> role of one member
+    private void handleGetParticipant(TLRPC.TL_channels_getParticipant req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                long userTlId = req.participant instanceof TLRPC.TL_inputPeerSelf && selfMongoId != null
+                        ? idFromMongoId(selfMongoId) : req.participant.user_id;
+                String userMongoId = req.participant instanceof TLRPC.TL_inputPeerSelf ? selfMongoId : userMongoIdByTlId.get(userTlId);
+                if (convId == null || userMongoId == null) {
+                    complete(onComplete, null, tlError(400, "USER_NOT_PARTICIPANT"));
+                    return;
+                }
+                JSONObject conv = fetchConversation(convId);
+                JSONArray participants = conv.optJSONArray("participants");
+                JSONObject found = null;
+                for (int i = 0; participants != null && i < participants.length(); i++) {
+                    JSONObject p = participants.optJSONObject(i);
+                    if (p != null && userMongoId.equals(p.optString("_id"))) {
+                        found = p;
+                        break;
+                    }
+                }
+                if (found == null) {
+                    complete(onComplete, null, tlError(400, "USER_NOT_PARTICIPANT"));
+                    return;
+                }
+                TLRPC.TL_channels_channelParticipant result = new TLRPC.TL_channels_channelParticipant();
+                TLRPC.TL_user user = buildTLUser(found, userMongoId.equals(selfMongoId));
+                result.users.add(user);
+                TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                peer.user_id = user.id;
+                String ownerId = refId(conv, "owner");
+                TLRPC.ChannelParticipant participant;
+                if (userMongoId.equals(ownerId)) {
+                    TLRPC.TL_channelParticipantCreator creator = new TLRPC.TL_channelParticipantCreator();
+                    creator.admin_rights = fullAdminRights();
+                    participant = creator;
+                } else if (isAdminIn(conv, userMongoId)) {
+                    TLRPC.TL_channelParticipantAdmin admin = new TLRPC.TL_channelParticipantAdmin();
+                    admin.admin_rights = fullAdminRights();
+                    admin.self = userMongoId.equals(selfMongoId);
+                    admin.can_edit = selfMongoId != null && selfMongoId.equals(ownerId);
+                    admin.promoted_by = ownerId != null ? idFromMongoId(ownerId) : 0;
+                    participant = admin;
+                } else {
+                    participant = new TLRPC.TL_channelParticipant();
+                }
+                participant.peer = peer;
+                participant.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
+                result.participant = participant;
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private static boolean isAdminIn(JSONObject conv, String userMongoId) {
+        JSONArray admins = conv.optJSONArray("admins");
+        for (int i = 0; admins != null && i < admins.length(); i++) {
+            Object a = admins.opt(i);
+            String id = a instanceof JSONObject ? ((JSONObject) a).optString("_id") : String.valueOf(a);
+            if (userMongoId.equals(id)) return true;
+        }
+        return false;
+    }
+
+    // channels.getAdminedPublicChannels -> my own public groups/channels
+    // (used by the profile "personal channel" picker and username limits)
+    private void handleGetAdminedPublicChannels(RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_chats result = new TLRPC.TL_messages_chats();
+            try {
+                JSONArray conversations = requestArray("GET", "/messages/conversations", null, true);
+                for (int i = 0; i < conversations.length(); i++) {
+                    JSONObject conv = conversations.getJSONObject(i);
+                    String type = conv.optString("type");
+                    if (!"channel".equals(type) && !"group".equals(type)) continue;
+                    if (selfMongoId == null || !selfMongoId.equals(refId(conv, "owner"))) continue;
+                    if (conv.optString("handle", "").isEmpty() || conv.optBoolean("isPrivateLink", false)) continue;
+                    addConversationChat(conv, result.chats);
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Fetch specific messages (reply previews, pinned, personal channel
+    // post): messages.getMessages / channels.getMessages -> /messages/by-ids
+    // ---------------------------------------------------------------
+    private TLRPC.Peer peerForMessageJson(JSONObject m, ArrayList<TLRPC.User> users, ArrayList<TLRPC.Chat> chats) throws Exception {
+        String conversationId = refId(m, "conversationId");
+        if (conversationId == null) return null;
+        TLRPC.Peer peer = resolvePeerForConversationId(conversationId);
+        if (peer == null) {
+            peer = registerConversationById(conversationId, users, chats);
+        }
+        return peer;
+    }
+
+    private void addSender(JSONObject m, ArrayList<TLRPC.User> users) throws Exception {
+        JSONObject sender = m.optJSONObject("sender");
+        if (sender != null && sender.has("_id")) {
+            addUserOnce(users, buildTLUser(sender, sender.getString("_id").equals(selfMongoId)));
+        }
+    }
+
+    private void handleGetMessagesByIds(ArrayList<Integer> ids, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_messages result = new TLRPC.TL_messages_messages();
+            try {
+                StringBuilder mongoIds = new StringBuilder();
+                for (Integer id : ids) {
+                    String mongoId = messageMongoIdByTlId.get(id);
+                    if (mongoId != null) {
+                        if (mongoIds.length() > 0) mongoIds.append(',');
+                        mongoIds.append(mongoId);
+                    }
+                }
+                if (mongoIds.length() > 0) {
+                    JSONArray found = requestArray("GET", "/messages/by-ids?ids=" + mongoIds, null, true);
+                    for (int i = 0; i < found.length(); i++) {
+                        JSONObject m = found.getJSONObject(i);
+                        TLRPC.Peer peer = peerForMessageJson(m, result.users, result.chats);
+                        if (peer == null) continue;
+                        result.messages.add(buildTLMessage(m, peer));
+                        addSender(m, result.users);
+                    }
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Search: messages.search (in a chat, also powers the shared-media
+    // tabs via filters), messages.searchGlobal, messages.getSearchCounters
+    // ---------------------------------------------------------------
+    private static String searchFilterName(TLRPC.MessagesFilter filter) {
+        if (filter instanceof TLRPC.TL_inputMessagesFilterPhotos) return "photo";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterPhotoVideo) return "photovideo";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterVideo) return "video";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterDocument) return "file";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterMusic) return "music";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterVoice || filter instanceof TLRPC.TL_inputMessagesFilterRoundVoice) return "voice";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterUrl) return "url";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterGif) return "gif";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterGeo) return "location";
+        if (filter instanceof TLRPC.TL_inputMessagesFilterRoundVideo) return "none";
+        return "";
+    }
+
+    private void handleSearch(TLRPC.InputPeer peer, String q, TLRPC.MessagesFilter filter, int offsetId, int limit, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_messagesSlice result = new TLRPC.TL_messages_messagesSlice();
+            try {
+                String filterName = searchFilterName(filter);
+                String query = q == null ? "" : q.trim();
+                if ("none".equals(filterName) || (query.isEmpty() && filterName.isEmpty())) {
+                    complete(onComplete, result, null);
+                    return;
+                }
+                StringBuilder path = new StringBuilder("/messages/search?limit=").append(Math.max(1, Math.min(limit, 100)));
+                if (!query.isEmpty()) path.append("&q=").append(java.net.URLEncoder.encode(query, "UTF-8"));
+                if (!filterName.isEmpty()) path.append("&filter=").append(filterName);
+                if (peer != null) {
+                    String convId = resolveConversationId(peer);
+                    if (convId == null) {
+                        complete(onComplete, result, null);
+                        return;
+                    }
+                    path.append("&conversationId=").append(convId);
+                }
+                if (offsetId != 0) {
+                    String before = messageMongoIdByTlId.get(offsetId);
+                    if (before == null) {
+                        complete(onComplete, result, null);
+                        return;
+                    }
+                    path.append("&before=").append(before);
+                }
+                JSONObject resp = request("GET", path.toString(), null, true);
+                JSONArray found = resp.optJSONArray("messages");
+                for (int i = 0; found != null && i < found.length(); i++) {
+                    JSONObject m = found.getJSONObject(i);
+                    TLRPC.Peer msgPeer = peerForMessageJson(m, result.users, result.chats);
+                    if (msgPeer == null) continue;
+                    result.messages.add(buildTLMessage(m, msgPeer));
+                    addSender(m, result.users);
+                }
+                for (Long chatId : collectChatIds(result.messages)) {
+                    TLRPC.Chat cached = org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(chatId);
+                    if (cached != null && !containsChat(result.chats, chatId)) {
+                        result.chats.add(cached);
+                    }
+                }
+                result.count = resp.optInt("count", result.messages.size());
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private static java.util.Set<Long> collectChatIds(ArrayList<TLRPC.Message> messages) {
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        for (TLRPC.Message m : messages) {
+            if (m.peer_id != null && m.peer_id.channel_id != 0) ids.add(m.peer_id.channel_id);
+            if (m.peer_id != null && m.peer_id.chat_id != 0) ids.add(m.peer_id.chat_id);
+        }
+        return ids;
+    }
+
+    private static boolean containsChat(ArrayList<TLRPC.Chat> chats, long id) {
+        for (TLRPC.Chat c : chats) {
+            if (c.id == id) return true;
+        }
+        return false;
+    }
+
+    private void handleSearchCounters(TLRPC.TL_messages_getSearchCounters req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            Vector<TLRPC.TL_messages_searchCounter> result = new Vector<>(TLRPC.TL_messages_searchCounter::TLdeserialize);
+            try {
+                String convId = resolveConversationId(req.peer);
+                for (TLRPC.MessagesFilter filter : req.filters) {
+                    TLRPC.TL_messages_searchCounter counter = new TLRPC.TL_messages_searchCounter();
+                    counter.filter = filter;
+                    String name = searchFilterName(filter);
+                    if (convId != null && !name.isEmpty() && !"none".equals(name)) {
+                        try {
+                            JSONObject resp = request("GET", "/messages/search?limit=1&filter=" + name + "&conversationId=" + convId, null, true);
+                            counter.count = resp.optInt("count", 0);
+                        } catch (Exception e) {
+                            FileLog.e(e);
+                        }
+                    }
+                    result.objects.add(counter);
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Channel comments: the post's copy ("anchor") in the linked discussion
+    // group is the thread root; comments are group messages replying to it.
+    // ---------------------------------------------------------------
+    private void handleGetDiscussionMessage(TLRPC.TL_messages_getDiscussionMessage req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String postMongoId = messageMongoIdByTlId.get(req.msg_id);
+                if (postMongoId == null) {
+                    complete(onComplete, null, tlError(400, "MSG_ID_INVALID"));
+                    return;
+                }
+                JSONObject resp = request("GET", "/messages/discussion/" + postMongoId, null, true);
+                JSONObject group = resp.optJSONObject("group");
+                JSONObject anchor = resp.optJSONObject("anchor");
+                if (group == null || anchor == null) {
+                    complete(onComplete, null, tlError(400, "MSG_ID_INVALID"));
+                    return;
+                }
+                TLRPC.TL_messages_discussionMessage result = new TLRPC.TL_messages_discussionMessage();
+                String channelMongoId = resp.optString("channelId", "");
+                long groupTlId = idFromMongoId(group.getString("_id"));
+                if (channelMongoId.length() == 24) {
+                    linkedChatMongoIdByTlId.put(groupTlId, channelMongoId);
+                }
+                TLRPC.Peer groupPeer = addConversationChat(group, result.chats);
+                TLRPC.Chat channel = org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(req.peer.channel_id);
+                if (channel != null) {
+                    result.chats.add(channel);
+                }
+                TLRPC.TL_message root = buildTLMessage(anchor, groupPeer);
+                result.messages.add(root);
+                addSender(anchor, result.users);
+                result.max_id = root.id;
+                result.read_inbox_max_id = Integer.MAX_VALUE;
+                result.read_outbox_max_id = Integer.MAX_VALUE;
+                result.unread_count = 0;
+                result.flags |= TLObject.FLAG_0 | TLObject.FLAG_1 | TLObject.FLAG_2;
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(400, "MSG_ID_INVALID"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    private void handleGetReplies(TLRPC.TL_messages_getReplies req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_messagesSlice result = new TLRPC.TL_messages_messagesSlice();
+            try {
+                String anchorMongoId = messageMongoIdByTlId.get(req.msg_id);
+                if (anchorMongoId == null || (req.add_offset < 0 && req.offset_id != 0)) {
+                    complete(onComplete, result, null);
+                    return;
+                }
+                String path = "/messages/replies/" + anchorMongoId + "?limit=" + Math.max(1, Math.min(req.limit, 100));
+                if (req.offset_id != 0) {
+                    String before = messageMongoIdByTlId.get(req.offset_id);
+                    if (before != null) {
+                        path += "&before=" + before;
+                    }
+                }
+                JSONObject resp = request("GET", path, null, true);
+                JSONArray found = resp.optJSONArray("messages");
+                TLRPC.Peer peer = peerFromInput(req.peer);
+                for (int i = 0; found != null && i < found.length(); i++) {
+                    JSONObject m = found.getJSONObject(i);
+                    result.messages.add(buildTLMessage(m, peer));
+                    addSender(m, result.users);
+                }
+                java.util.Collections.reverse(result.messages); // newest first
+                result.count = resp.optInt("count", result.messages.size());
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // messages.getMessagesViews -> POST /messages/views
+    private void handleGetMessagesViews(TLRPC.TL_messages_getMessagesViews req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_messageViews result = new TLRPC.TL_messages_messageViews();
+            HashMap<String, Integer> viewsByMongo = new HashMap<>();
+            try {
+                JSONArray ids = new JSONArray();
+                for (Integer id : req.id) {
+                    String mongoId = messageMongoIdByTlId.get(id);
+                    if (mongoId != null) ids.put(mongoId);
+                }
+                if (ids.length() > 0) {
+                    JSONObject body = new JSONObject();
+                    body.put("ids", ids);
+                    body.put("increment", req.increment);
+                    String text = requestText("POST", "/messages/views", body, true);
+                    JSONArray counts = text != null && text.trim().startsWith("[") ? new JSONArray(text) : new JSONArray();
+                    for (int i = 0; i < counts.length(); i++) {
+                        JSONObject c = counts.getJSONObject(i);
+                        viewsByMongo.put(c.optString("_id"), c.optInt("views", 0));
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            for (Integer id : req.id) {
+                TLRPC.TL_messageViews views = new TLRPC.TL_messageViews();
+                Integer count = viewsByMongo.get(messageMongoIdByTlId.get(id));
+                if (count != null) {
+                    views.views = Math.max(1, count);
+                    views.flags |= TLObject.FLAG_0;
+                }
+                result.views.add(views);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Profile extras: music on profile, photo history, game scores
+    // ---------------------------------------------------------------
+    private TLRPC.Document buildSongDocument(JSONObject song) {
+        String url = song.optString("url", "");
+        if (url.isEmpty()) return null;
+        TLRPC.TL_messageMediaDocument media = buildDocumentMedia(absoluteUrl(url), "audio/mpeg", song.optString("title", "track") + ".mp3", "audio");
+        TLRPC.Document doc = media.document;
+        for (TLRPC.DocumentAttribute attr : doc.attributes) {
+            if (attr instanceof TLRPC.TL_documentAttributeAudio) {
+                attr.title = song.optString("title", "");
+                attr.performer = song.optString("senderName", "");
+                attr.duration = song.optDouble("duration", 0);
+                attr.flags |= 1 | 2;
+            }
+        }
+        return doc;
+    }
+
+    private JSONObject fetchUserJson(TLRPC.InputUser inputUser) throws Exception {
+        boolean self = inputUser instanceof TLRPC.TL_inputUserSelf
+                || (selfMongoId != null && inputUser.user_id == idFromMongoId(selfMongoId));
+        if (self) {
+            return request("GET", "/auth/me", null, true);
+        }
+        String mongoId = userMongoIdByTlId.get(inputUser.user_id);
+        if (mongoId == null) {
+            throw new RestException(404, "Unknown user");
+        }
+        return request("GET", "/auth/users/" + mongoId, null, true);
+    }
+
+    private void handleGetSavedMusic(TLRPC.TL_getSavedMusic req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_savedMusic result = new TLRPC.TL_savedMusic();
+            try {
+                JSONObject userJson = fetchUserJson(req.id);
+                JSONArray songs = userJson.optJSONArray("profileSongs");
+                ArrayList<TLRPC.Document> all = new ArrayList<>();
+                for (int i = 0; songs != null && i < songs.length(); i++) {
+                    TLRPC.Document doc = buildSongDocument(songs.getJSONObject(i));
+                    if (doc != null) all.add(doc);
+                }
+                result.count = all.size();
+                for (int i = Math.max(0, req.offset); i < all.size() && result.documents.size() < Math.max(1, req.limit); i++) {
+                    result.documents.add(all.get(i));
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private void handleGetUserPhotos(TLRPC.TL_photos_getUserPhotos req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_photos_photos result = new TLRPC.TL_photos_photos();
+            try {
+                JSONObject userJson = fetchUserJson(req.user_id);
+                java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
+                String avatar = userJson.optString("avatar", "");
+                if (!avatar.isEmpty()) urls.add(avatar);
+                JSONArray avatars = userJson.optJSONArray("avatars");
+                for (int i = 0; avatars != null && i < avatars.length(); i++) {
+                    String a = avatars.optString(i, "");
+                    if (!a.isEmpty() && !a.startsWith("data:")) urls.add(a);
+                }
+                int index = 0;
+                for (String url : urls) {
+                    if (index++ < req.offset) continue;
+                    if (req.limit > 0 && result.photos.size() >= req.limit) break;
+                    result.photos.add(buildPhotoMedia(absoluteUrl(url)).photo);
+                }
+                result.count = urls.size();
+                result.users.add(buildTLUser(userJson, userJson.optString("_id").equals(selfMongoId)));
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private void handleGetGameHighScores(TLRPC.TL_messages_getGameHighScores req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_messages_highScores result = new TLRPC.TL_messages_highScores();
+            try {
+                String mongoId = messageMongoIdByTlId.get(req.id);
+                if (mongoId != null) {
+                    JSONArray rows = requestArray("GET", "/messages/" + mongoId + "/game-scores", null, true);
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject row = rows.getJSONObject(i);
+                        JSONObject userJson = row.optJSONObject("user");
+                        if (userJson == null || !userJson.has("_id")) continue;
+                        TLRPC.TL_user user = buildTLUser(userJson, userJson.getString("_id").equals(selfMongoId));
+                        addUserOnce(result.users, user);
+                        TLRPC.TL_highScore score = new TLRPC.TL_highScore();
+                        score.pos = row.optInt("position", i + 1);
+                        score.user_id = user.id;
+                        score.score = row.optInt("score", 0);
+                        result.scores.add(score);
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
     // Bot API style replyMarkup (inline_keyboard / keyboard /
     // remove_keyboard) -> TL reply markup
     // ---------------------------------------------------------------
@@ -1529,6 +2224,8 @@ public class RestBridge {
                             TL_keyboard.TL_inlineButtonTypeUrl t = new TL_keyboard.TL_inlineButtonTypeUrl();
                             t.url = bj.optString("url");
                             button.type = t;
+                        } else if (bj.has("callback_game")) {
+                            button.type = new TL_keyboard.TL_inlineButtonTypeGame();
                         } else if (bj.optJSONObject("web_app") != null) {
                             TL_keyboard.TL_inlineButtonTypeUrl t = new TL_keyboard.TL_inlineButtonTypeUrl();
                             t.url = bj.optJSONObject("web_app").optString("url");
@@ -1592,7 +2289,13 @@ public class RestBridge {
                     if (messageMongoId != null) {
                         body.put("messageId", messageMongoId);
                     }
-                    JSONObject resp = request("POST", "/messages/callback_query", body, true);
+                    if (req.game) {
+                        String shortName = gameShortNameByMsg.get(req.msg_id);
+                        if (shortName != null) {
+                            body.put("gameShortName", shortName);
+                        }
+                    }
+                    JSONObject resp = request("POST", "/messages/callback_query_answer", body, true);
                     String text = resp.optString("text", resp.optString("answer", ""));
                     if (!text.isEmpty()) {
                         answer.message = text;
@@ -1647,6 +2350,12 @@ public class RestBridge {
             String replyMongoId = messageMongoIdByTlId.get(replyTo.reply_to_msg_id);
             if (replyMongoId != null) {
                 body.put("replyTo", replyMongoId);
+            }
+            if (replyTo.top_msg_id != 0 && replyTo.top_msg_id != replyTo.reply_to_msg_id) {
+                String rootMongoId = messageMongoIdByTlId.get(replyTo.top_msg_id);
+                if (rootMongoId != null) {
+                    body.put("threadRoot", rootMongoId);
+                }
             }
         }
     }
@@ -1916,14 +2625,17 @@ public class RestBridge {
                         dialog.peer = peer;
                         dialog.id = -channelTlId;
                     } else {
+                        // Groups are exposed as supergroups (megagroup
+                        // channels): that's what all the member/admin/ban/
+                        // slow-mode/permission handlers here speak.
                         long chatTlId = idFromMongoId(convId);
                         conversationIdByChatPeer.put(chatTlId, convId);
 
-                        TLRPC.TL_chat tlChat = buildTLChat(conv, chatTlId);
+                        TLRPC.TL_channel tlChat = buildTLChannel(conv, chatTlId);
                         result.chats.add(tlChat);
 
-                        TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
-                        peer.chat_id = chatTlId;
+                        TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
+                        peer.channel_id = chatTlId;
                         dialog.peer = peer;
                         dialog.id = -chatTlId;
                     }
@@ -2245,40 +2957,125 @@ public class RestBridge {
             try {
                 boolean self = req.id instanceof TLRPC.TL_inputUserSelf
                         || (selfMongoId != null && req.id.user_id == idFromMongoId(selfMongoId));
-                JSONObject userJson;
-                if (self) {
-                    userJson = request("GET", "/auth/me", null, true);
-                } else {
-                    // idFromMongoId() is one-way, so resolving a full profile for a
-                    // user we only know by TL id relies on userMongoIdByTlId, which
-                    // buildTLUser() populates every time it constructs a user -
-                    // meaning the user must have shown up in a dialog/contacts/etc.
-                    // fetch already, which is always true for "view full profile"
-                    // opened from the UI.
-                    String resolvedId = userMongoIdByTlId.get(req.id.user_id);
-                    if (resolvedId == null) {
-                        complete(onComplete, null, restError(404, "Unknown user"));
-                        return;
-                    }
-                    userJson = request("GET", "/auth/users/" + resolvedId, null, true);
-                }
+                JSONObject userJson = fetchUserJson(req.id);
+
+                TLRPC.TL_users_userFull result = new TLRPC.TL_users_userFull();
+                TLRPC.TL_user user = buildTLUser(userJson, self);
+                result.users.add(user);
 
                 TLRPC.TL_userFull full = new TLRPC.TL_userFull();
-                full.id = idFromMongoId(userJson.getString("_id"));
+                full.id = user.id;
+                full.user = user;
                 String about = userJson.optString("about", null);
-                if (about != null && about.length() > 0) {
+                if (about != null && about.trim().length() > 0 && !"null".equals(about)) {
                     full.about = about;
                     full.flags |= TLObject.FLAG_1; // about present
                 }
                 full.settings = new TLRPC.TL_peerSettings();
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.common_chats_count = 0;
+                full.display_gifts_button = true;
+                full.phone_calls_available = false;
 
-                TLRPC.TL_users_userFull result = new TLRPC.TL_users_userFull();
+                String avatar = userJson.optString("avatar", "");
+                if (!avatar.isEmpty() && !"null".equals(avatar) && !avatar.startsWith("data:")) {
+                    full.profile_photo = buildPhotoMedia(absoluteUrl(avatar)).photo;
+                    full.flags |= TLObject.FLAG_2;
+                }
+
+                String birthday = userJson.optString("birthday", "");
+                if (birthday.length() >= 10) {
+                    try {
+                        TL_account.TL_birthday b = new TL_account.TL_birthday();
+                        b.year = Integer.parseInt(birthday.substring(0, 4));
+                        b.month = Integer.parseInt(birthday.substring(5, 7));
+                        b.day = Integer.parseInt(birthday.substring(8, 10));
+                        b.flags |= 1; // year present
+                        full.birthday = b;
+                        full.flags2 |= TLObject.FLAG_5;
+                    } catch (Exception ignore) {
+                    }
+                }
+
+                // Channel pinned on the profile ("personal channel").
+                Object profileChannel = userJson.opt("profileChannel");
+                String channelId = profileChannel instanceof JSONObject
+                        ? ((JSONObject) profileChannel).optString("_id", "")
+                        : (profileChannel == null || profileChannel == JSONObject.NULL ? "" : String.valueOf(profileChannel));
+                if (channelId.length() == 24) {
+                    try {
+                        JSONObject channelConv = fetchConversation(channelId);
+                        TLRPC.Peer channelPeer = addConversationChat(channelConv, result.chats);
+                        full.personal_channel_id = channelPeer.channel_id;
+                        JSONObject last = channelConv.optJSONObject("lastMessage");
+                        String lastId = last != null ? last.optString("_id", "") : channelConv.optString("lastMessage", "");
+                        if (lastId.length() == 24) {
+                            full.personal_channel_message = idFromMongoIdInt32(lastId);
+                            messageMongoIdByTlId.put(full.personal_channel_message, lastId);
+                        }
+                        full.flags2 |= TLObject.FLAG_6;
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                }
+
+                // Music on profile.
+                JSONObject activeSong = userJson.optJSONObject("profileActiveSong");
+                JSONArray songs = userJson.optJSONArray("profileSongs");
+                if ((activeSong == null || activeSong.optString("url", "").isEmpty()) && songs != null && songs.length() > 0) {
+                    activeSong = songs.optJSONObject(0);
+                }
+                if (activeSong != null) {
+                    TLRPC.Document song = buildSongDocument(activeSong);
+                    if (song != null) {
+                        full.saved_music = song;
+                        full.flags2 |= TLObject.FLAG_21;
+                    }
+                }
+
+                // Gifts tab only shows when the count is known to be > 0.
+                try {
+                    JSONArray gifts = requestArray("GET", "/gifts/user/" + userJson.getString("_id"), null, true);
+                    if (gifts.length() > 0) {
+                        full.stargifts_count = gifts.length();
+                        full.flags2 |= TLObject.FLAG_8;
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+
+                // Bots: description + command menu.
+                if (userJson.optBoolean("isBot", false)) {
+                    TL_bots.TL_botInfo info = new TL_bots.TL_botInfo();
+                    info.user_id = user.id;
+                    info.flags |= 1;
+                    if (about != null && !about.isEmpty()) {
+                        info.description = about;
+                        info.flags |= 2;
+                    }
+                    JSONArray commands = userJson.optJSONArray("botCommands");
+                    for (int i = 0; commands != null && i < commands.length(); i++) {
+                        JSONObject c = commands.optJSONObject(i);
+                        if (c == null || c.optString("command", "").isEmpty()) continue;
+                        TLRPC.TL_botCommand command = new TLRPC.TL_botCommand();
+                        command.command = c.optString("command").replaceFirst("^/", "");
+                        command.description = c.optString("description", "");
+                        info.commands.add(command);
+                    }
+                    info.flags |= 4;
+                    if (!info.commands.isEmpty()) {
+                        info.menu_button = new TL_bots.TL_botMenuButtonCommands();
+                        info.flags |= 8;
+                    }
+                    full.bot_info = info;
+                    full.flags |= TLObject.FLAG_3;
+                }
+
                 result.full_user = full;
-                result.users.add(buildTLUser(userJson, self));
-
+                savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, result, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -2580,28 +3377,17 @@ public class RestBridge {
                 String convId = conv.getString("_id");
                 long chatTlId = idFromMongoId(convId);
                 conversationIdByChatPeer.put(chatTlId, convId);
-                TLRPC.TL_chat tlChat = buildTLChat(conv, chatTlId);
-
-                TL_update.TL_updateNewMessage joinNotice = new TL_update.TL_updateNewMessage();
-                TLRPC.TL_message sysMsg = new TLRPC.TL_message();
-                sysMsg.id = idFromMongoIdInt32(convId);
-                sysMsg.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
-                TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
-                peer.chat_id = chatTlId;
-                sysMsg.peer_id = peer;
-                sysMsg.dialog_id = -chatTlId;
-                sysMsg.message = "";
-                joinNotice.message = sysMsg;
+                savePeerMap("peerMapChat", conversationIdByChatPeer);
+                SocketBridge.getInstance(currentAccount).joinConversation(convId);
 
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
-                updates.chats.add(tlChat);
-                updates.updates.add(joinNotice);
-                updates.date = sysMsg.date;
-
+                updates.chats.add(buildTLChannel(conv, chatTlId));
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
                 TLRPC.TL_messages_invitedUsers result = new TLRPC.TL_messages_invitedUsers();
                 result.updates = updates;
-                savePeerMap("peerMapChat", conversationIdByChatPeer);
                 complete(onComplete, result, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -2729,7 +3515,7 @@ public class RestBridge {
         executor.execute(() -> {
             try {
                 JSONObject body = new JSONObject();
-                body.put("type", "channel");
+                body.put("type", req.megagroup ? "group" : "channel");
                 body.put("name", req.title);
                 if (req.about != null) {
                     body.put("description", req.about);
@@ -2833,6 +3619,10 @@ public class RestBridge {
         if (key instanceof TLRPC.TL_inputPrivacyKeyChatInvite) return "groupsAndChannels";
         if (key instanceof TLRPC.TL_inputPrivacyKeyProfilePhoto) return "profilePhoto";
         if (key instanceof TLRPC.TL_inputPrivacyKeyPhoneCall) return "calls";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyAbout) return "bio";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyBirthday) return "birthday";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyVoiceMessages) return "voiceMessages";
+        if (key instanceof TLRPC.TL_inputPrivacyKeyStarGiftsAutoSave) return "gifts";
         return null;
     }
 
@@ -3251,6 +4041,15 @@ public class RestBridge {
         });
     }
 
+    private JSONObject fetchConversation(String convId) throws Exception {
+        try {
+            return request("GET", "/conversations/" + convId, null, true);
+        } catch (RestException e) {
+            // Not a member (public preview): the messages route serves it too.
+            return request("GET", "/messages/conversations/" + convId, null, true);
+        }
+    }
+
     private void handleGetFullChannel(TLRPC.TL_channels_getFullChannel req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
@@ -3259,31 +4058,71 @@ public class RestBridge {
                     complete(onComplete, null, restError(404, "Unknown channel"));
                     return;
                 }
-                JSONObject conv = request("GET", "/conversations/" + convId, null, true);
+                JSONObject conv = fetchConversation(convId);
+                TLRPC.TL_channel channel = buildTLChannel(conv, req.channel.channel_id);
+                boolean isCreator = channel.creator;
+                boolean isAdmin = channel.admin_rights != null;
 
                 TLRPC.TL_channelFull full = new TLRPC.TL_channelFull();
                 full.id = req.channel.channel_id;
                 full.about = conv.optString("description", "");
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.chat_photo = buildFullChatPhoto(conv);
-                full.can_set_username = selfMongoId != null && selfMongoId.equals(refId(conv, "owner"));
+                full.can_set_username = isCreator;
+                full.can_view_participants = true;
                 full.available_reactions = new TLRPC.TL_chatReactionsAll();
                 full.flags |= TLObject.FLAG_30;
-                full.can_view_participants = true;
                 JSONArray participantsJson = conv.optJSONArray("participants");
                 if (participantsJson != null) {
                     full.participants_count = participantsJson.length();
                     full.flags |= TLObject.FLAG_0;
+                }
+                JSONArray admins = conv.optJSONArray("admins");
+                if (admins != null) {
+                    full.admins_count = admins.length();
+                    full.flags |= TLObject.FLAG_1;
+                }
+                if (isAdmin) {
+                    JSONArray banned = conv.optJSONArray("bannedUsers");
+                    JSONArray restricted = conv.optJSONArray("restrictedUsers");
+                    full.kicked_count = banned != null ? banned.length() : 0;
+                    full.banned_count = restricted != null ? restricted.length() : 0;
+                    full.flags |= TLObject.FLAG_2;
+                }
+                int slow = conv.optInt("slowModeInterval", 0);
+                if (slow > 0) {
+                    full.slowmode_seconds = slow;
+                    full.flags |= TLObject.FLAG_17;
                 }
                 full.read_inbox_max_id = 0;
                 full.read_outbox_max_id = 0;
                 full.unread_count = 0;
 
                 TLRPC.TL_messages_chatFull result = new TLRPC.TL_messages_chatFull();
+                result.chats.add(channel);
+
+                // Linked discussion group <-> channel (comments).
+                String linkedId = refId(conv, "linkedDiscussionGroupId");
+                if (linkedId == null || linkedId.length() != 24) {
+                    linkedId = refId(conv, "discussionForChannelId");
+                }
+                if (linkedId != null && linkedId.length() == 24) {
+                    try {
+                        JSONObject linkedConv = fetchConversation(linkedId);
+                        long linkedTlId = idFromMongoId(linkedId);
+                        conversationIdByChatPeer.put(linkedTlId, linkedId);
+                        savePeerMap("peerMapChat", conversationIdByChatPeer);
+                        result.chats.add(buildTLChannel(linkedConv, linkedTlId));
+                        full.linked_chat_id = linkedTlId;
+                        full.flags |= TLObject.FLAG_14;
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                }
+
                 ArrayList<TLRPC.ChatParticipant> discard = new ArrayList<>();
                 fillParticipants(conv, discard, result.users);
                 result.full_chat = full;
-                result.chats.add(buildTLChannel(conv, req.channel.channel_id));
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
@@ -3320,25 +4159,89 @@ public class RestBridge {
                     complete(onComplete, null, restError(404, "Unknown channel"));
                     return;
                 }
-                JSONObject conv = request("GET", "/conversations/" + convId, null, true);
-                JSONArray participantsJson = conv.optJSONArray("participants");
-
+                JSONObject conv = fetchConversation(convId);
+                String ownerId = refId(conv, "owner");
+                java.util.HashSet<String> adminIds = new java.util.HashSet<>();
+                JSONArray admins = conv.optJSONArray("admins");
+                for (int i = 0; admins != null && i < admins.length(); i++) {
+                    Object a = admins.opt(i);
+                    adminIds.add(a instanceof JSONObject ? ((JSONObject) a).optString("_id") : String.valueOf(a));
+                }
+                int now = (int) (System.currentTimeMillis() / 1000L);
                 TLRPC.TL_channels_channelParticipants result = new TLRPC.TL_channels_channelParticipants();
-                if (participantsJson != null) {
-                    for (int i = 0; i < participantsJson.length(); i++) {
-                        JSONObject p = participantsJson.getJSONObject(i);
-                        TLRPC.TL_user tlUser = buildTLUser(p, p.getString("_id").equals(selfMongoId));
-                        addUserOnce(result.users, tlUser);
+                ArrayList<TLRPC.ChannelParticipant> all = new ArrayList<>();
 
-                        TLRPC.TL_channelParticipant participant = new TLRPC.TL_channelParticipant();
+                if (req.filter instanceof TLRPC.TL_channelParticipantsKicked || req.filter instanceof TLRPC.TL_channelParticipantsBanned) {
+                    boolean kicked = req.filter instanceof TLRPC.TL_channelParticipantsKicked;
+                    JSONArray list = conv.optJSONArray(kicked ? "bannedUsers" : "restrictedUsers");
+                    for (int i = 0; list != null && i < list.length(); i++) {
+                        JSONObject entry = list.optJSONObject(i);
+                        JSONObject userJson = entry != null ? entry.optJSONObject("user") : null;
+                        if (userJson == null || !userJson.has("_id")) continue;
+                        TLRPC.TL_user tlUser = buildTLUser(userJson, false);
+                        addUserOnce(result.users, tlUser);
+                        TLRPC.TL_channelParticipantBanned banned = new TLRPC.TL_channelParticipantBanned();
                         TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
                         peer.user_id = tlUser.id;
-                        participant.peer = peer;
-                        participant.date = (int) (System.currentTimeMillis() / 1000L);
-                        result.participants.add(participant);
+                        banned.peer = peer;
+                        banned.date = now;
+                        banned.left = kicked;
+                        TLRPC.TL_chatBannedRights rights = new TLRPC.TL_chatBannedRights();
+                        if (kicked) {
+                            rights.view_messages = true;
+                        } else {
+                            rights.send_messages = true;
+                            rights.send_media = true;
+                        }
+                        banned.banned_rights = rights;
+                        all.add(banned);
                     }
-                    result.count = participantsJson.length();
+                } else {
+                    String q = req.filter != null && req.filter.q != null ? req.filter.q.trim().toLowerCase(Locale.US) : "";
+                    boolean adminsOnly = req.filter instanceof TLRPC.TL_channelParticipantsAdmins;
+                    JSONArray participantsJson = conv.optJSONArray("participants");
+                    for (int i = 0; participantsJson != null && i < participantsJson.length(); i++) {
+                        JSONObject p = participantsJson.optJSONObject(i);
+                        if (p == null || !p.has("_id")) continue;
+                        String id = p.getString("_id");
+                        boolean isOwner = id.equals(ownerId);
+                        boolean isAdmin = isOwner || adminIds.contains(id);
+                        if (adminsOnly && !isAdmin) continue;
+                        if (!q.isEmpty()) {
+                            String hay = (p.optString("name", "") + " " + p.optString("username", "")).toLowerCase(Locale.US);
+                            if (!hay.contains(q)) continue;
+                        }
+                        TLRPC.TL_user tlUser = buildTLUser(p, id.equals(selfMongoId));
+                        addUserOnce(result.users, tlUser);
+                        TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                        peer.user_id = tlUser.id;
+                        TLRPC.ChannelParticipant participant;
+                        if (isOwner) {
+                            TLRPC.TL_channelParticipantCreator creator = new TLRPC.TL_channelParticipantCreator();
+                            creator.admin_rights = fullAdminRights();
+                            participant = creator;
+                        } else if (isAdmin) {
+                            TLRPC.TL_channelParticipantAdmin admin = new TLRPC.TL_channelParticipantAdmin();
+                            admin.admin_rights = fullAdminRights();
+                            admin.can_edit = selfMongoId != null && selfMongoId.equals(ownerId);
+                            admin.self = id.equals(selfMongoId);
+                            admin.promoted_by = ownerId != null ? idFromMongoId(ownerId) : 0;
+                            participant = admin;
+                        } else {
+                            participant = new TLRPC.TL_channelParticipant();
+                        }
+                        participant.peer = peer;
+                        participant.date = now;
+                        all.add(participant);
+                    }
                 }
+                result.count = all.size();
+                int from = Math.max(0, req.offset);
+                int to = req.limit > 0 ? Math.min(all.size(), from + req.limit) : all.size();
+                for (int i = from; i < to; i++) {
+                    result.participants.add(all.get(i));
+                }
+                savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
@@ -3547,11 +4450,22 @@ public class RestBridge {
                 }
 
                 int limit = Math.max(1, Math.min(req.limit, 100));
-                int skip = req.offset_id == 0 ? 0 : historyLoadedCount.getOrDefault(conversationId, 0);
-                int page = (skip / limit) + 1;
-                String path = "/messages/" + conversationId + "?page=" + page + "&limit=" + limit;
+                if (req.add_offset < 0 && req.offset_id != 0) {
+                    // "Newer than offset_id": the live socket already delivers
+                    // those, and older-only paging is what the backend offers.
+                    complete(onComplete, new TLRPC.TL_messages_messages(), null);
+                    return;
+                }
+                String path = "/messages/" + conversationId + "?page=1&limit=" + limit;
+                if (req.offset_id != 0) {
+                    String beforeMongoId = messageMongoIdByTlId.get(req.offset_id);
+                    if (beforeMongoId == null) {
+                        complete(onComplete, new TLRPC.TL_messages_messages(), null);
+                        return;
+                    }
+                    path += "&before=" + beforeMongoId;
+                }
                 JSONArray messages = requestArray("GET", path, null, true);
-                historyLoadedCount.put(conversationId, skip + messages.length());
 
                 TLRPC.TL_messages_messages result = new TLRPC.TL_messages_messages();
                 for (int i = 0; i < messages.length(); i++) {
@@ -3731,11 +4645,79 @@ public class RestBridge {
         }
 
         String replyToId = refId(m, "replyTo");
+        String threadRootId = refId(m, "threadRoot");
         if (replyToId != null && replyToId.length() == 24) {
             TLRPC.TL_messageReplyHeader header = new TLRPC.TL_messageReplyHeader();
             header.reply_to_msg_id = idFromMongoIdInt32(replyToId);
+            header.flags |= TLObject.FLAG_4; // reply_to_msg_id present
+            messageMongoIdByTlId.put(header.reply_to_msg_id, replyToId);
+            if (threadRootId != null && threadRootId.length() == 24 && !threadRootId.equals(replyToId)) {
+                header.reply_to_top_id = idFromMongoIdInt32(threadRootId);
+                header.flags |= TLObject.FLAG_1; // reply_to_top_id present
+                messageMongoIdByTlId.put(header.reply_to_top_id, threadRootId);
+            }
             msg.reply_to = header;
             msg.flags |= TLObject.FLAG_3;
+        }
+
+        // Discussion-group copy of a channel post: show it as forwarded from
+        // the channel, like Telegram's automatic forwards.
+        String linkedPostId = refId(m, "linkedChannelPostId");
+        if (m.optBoolean("isChannelDiscussionAnchor", false) && linkedPostId != null && linkedPostId.length() == 24 && peer.channel_id != 0) {
+            String channelMongoId = linkedChatMongoIdByTlId.get(peer.channel_id);
+            if (channelMongoId != null) {
+                TLRPC.TL_peerChannel channelPeer = new TLRPC.TL_peerChannel();
+                channelPeer.channel_id = idFromMongoId(channelMongoId);
+                TLRPC.TL_messageFwdHeader fwd = new TLRPC.TL_messageFwdHeader();
+                fwd.from_id = channelPeer;
+                fwd.date = msg.date;
+                fwd.channel_post = idFromMongoIdInt32(linkedPostId);
+                fwd.saved_from_peer = channelPeer;
+                fwd.saved_from_msg_id = fwd.channel_post;
+                fwd.flags |= TLObject.FLAG_0 | TLObject.FLAG_2 | TLObject.FLAG_4;
+                msg.fwd_from = fwd;
+                msg.flags |= TLObject.FLAG_2;
+            }
+        }
+
+        // Broadcast channel post: views + comments button.
+        if (peer.channel_id != 0 && broadcastTlIds.contains(peer.channel_id)) {
+            msg.post = true;
+            msg.views = Math.max(1, m.optInt("views", 0));
+            msg.flags |= TLObject.FLAG_10;
+            String anchorId = m.optString("discussionAnchorId", "");
+            String groupMongoId = linkedChatMongoIdByTlId.get(peer.channel_id);
+            if (anchorId.length() == 24 && groupMongoId != null) {
+                anchorMongoIdByPostTlId.put(msg.id, anchorId);
+                TLRPC.TL_messageReplies replies = new TLRPC.TL_messageReplies();
+                replies.comments = true;
+                replies.replies = m.optInt("commentsCount", 0);
+                replies.channel_id = idFromMongoId(groupMongoId);
+                msg.replies = replies;
+                msg.flags |= TLObject.FLAG_23;
+            }
+        }
+
+        if ("game".equals(type)) {
+            JSONObject g = m.optJSONObject("game");
+            if (g != null) {
+                TLRPC.TL_messageMediaGame gameMedia = new TLRPC.TL_messageMediaGame();
+                TLRPC.TL_game game = new TLRPC.TL_game();
+                game.short_name = g.optString("short_name", "game");
+                gameShortNameByMsg.put(msg.id, game.short_name);
+                game.id = idForUrl("game:" + mongoMessageId);
+                game.access_hash = 1;
+                game.title = g.optString("title", game.short_name);
+                game.description = g.optString("description", "");
+                String photoUrl = g.optString("photo_url", "");
+                game.photo = photoUrl.isEmpty() ? new TLRPC.TL_photoEmpty() : buildPhotoMedia(absoluteUrl(photoUrl)).photo;
+                gameMedia.game = game;
+                msg.media = gameMedia;
+                msg.flags |= TLObject.FLAG_9;
+                if (msg.message.startsWith("[")) {
+                    msg.message = "";
+                }
+            }
         }
 
         if (m.optBoolean("isEdited", false)) {
@@ -3767,6 +4749,17 @@ public class RestBridge {
             msg.from_id = fromPeer;
             msg.flags |= TLObject.FLAG_8; // from_id present
             msg.out = senderId.equals(selfMongoId);
+            if (msg.post) {
+                // Channel posts are authored by the channel itself.
+                msg.from_id = null;
+                msg.flags &= ~TLObject.FLAG_8;
+                String author = sender != null ? sender.optString("name", "") : "";
+                if (m.has("authorSignature") && !m.optString("authorSignature").isEmpty() && !"null".equals(m.optString("authorSignature"))) {
+                    author = m.optString("authorSignature");
+                    msg.post_author = author;
+                    msg.flags |= TLObject.FLAG_16;
+                }
+            }
         }
 
         return msg;
@@ -4091,14 +5084,25 @@ public class RestBridge {
         channelTlIds.add(channelTlId);
         channel.access_hash = 1;
         channel.flags |= TLObject.FLAG_13; // access_hash present
-        channel.title = conv.optString("name", "Channel");
+        boolean megagroup = !"channel".equals(conv.optString("type", "channel"));
+        channel.title = conv.optString("name", megagroup ? "Group" : "Channel");
         channel.photo = buildChatPhoto(conv);
         channel.date = parseIsoToEpochSeconds(conv.optString("createdAt", null));
-        channel.broadcast = true;
-        channel.megagroup = false;
+        channel.megagroup = megagroup;
+        channel.broadcast = !megagroup;
+        if (megagroup) {
+            broadcastTlIds.remove(channelTlId);
+        } else {
+            broadcastTlIds.add(channelTlId);
+        }
+        channel.verified = conv.optBoolean("isVerified", false);
+        channel.signatures = conv.optBoolean("showSignatures", false);
+        channel.noforwards = conv.optBoolean("protectedContent", false);
+        channel.join_request = conv.optBoolean("approveNewMembers", false);
+        channel.slowmode_enabled = conv.optInt("slowModeInterval", 0) > 0;
 
         String handle = conv.optString("handle", null);
-        if (handle != null && handle.length() > 0) {
+        if (handle != null && handle.length() > 0 && !"null".equals(handle) && !conv.optBoolean("isPrivateLink", false)) {
             channel.username = handle;
             channel.flags |= TLObject.FLAG_6; // username present
         }
@@ -4107,6 +5111,20 @@ public class RestBridge {
         if (participants != null) {
             channel.participants_count = participants.length();
             channel.flags |= TLObject.FLAG_17; // participants_count present
+            boolean member = false;
+            for (int i = 0; i < participants.length() && selfMongoId != null; i++) {
+                Object p = participants.opt(i);
+                String id = p instanceof JSONObject ? ((JSONObject) p).optString("_id") : String.valueOf(p);
+                if (selfMongoId.equals(id)) {
+                    member = true;
+                    break;
+                }
+            }
+            channel.left = !member;
+        } else if (conv.has("participantsCount")) {
+            channel.participants_count = conv.optInt("participantsCount");
+            channel.flags |= TLObject.FLAG_17;
+            channel.left = true;
         }
 
         String ownerId = refId(conv, "owner");
@@ -4116,8 +5134,60 @@ public class RestBridge {
         } else if (isSelfAdmin(conv)) {
             channel.admin_rights = fullAdminRights();
         }
+        if (channel.admin_rights != null) {
+            channel.flags |= TLObject.FLAG_14; // admin_rights present
+        }
 
+        if (megagroup) {
+            channel.default_banned_rights = defaultBannedRights(conv.optJSONObject("defaultPermissions"));
+            channel.flags |= TLObject.FLAG_18;
+        }
+
+        JSONObject voiceCall = conv.optJSONObject("voiceCall");
+        if (voiceCall != null && voiceCall.optBoolean("isLive", false)) {
+            channel.call_active = true;
+            JSONArray callers = voiceCall.optJSONArray("participants");
+            channel.call_not_empty = callers != null && callers.length() > 0;
+        }
+
+        String linked = refId(conv, "linkedDiscussionGroupId");
+        if (linked != null && linked.length() == 24) {
+            linkedChatMongoIdByTlId.put(channelTlId, linked);
+            channel.has_link = true;
+        }
+        String discussionFor = refId(conv, "discussionForChannelId");
+        if (discussionFor != null && discussionFor.length() == 24) {
+            linkedChatMongoIdByTlId.put(channelTlId, discussionFor);
+            channel.has_link = true;
+        }
         return channel;
+    }
+
+    // backend defaultPermissions (what members MAY do) -> Telegram default
+    // banned rights (what members may NOT do)
+    private static TLRPC.TL_chatBannedRights defaultBannedRights(JSONObject perms) {
+        TLRPC.TL_chatBannedRights rights = new TLRPC.TL_chatBannedRights();
+        if (perms == null) {
+            return rights;
+        }
+        rights.send_messages = !perms.optBoolean("canSendMessages", true);
+        rights.send_plain = rights.send_messages;
+        rights.send_media = !perms.optBoolean("canSendMedia", true);
+        rights.send_photos = rights.send_media;
+        rights.send_videos = rights.send_media;
+        rights.send_roundvideos = rights.send_media;
+        rights.send_docs = !perms.optBoolean("canSendFiles", true);
+        rights.send_audios = rights.send_docs;
+        rights.send_voices = !perms.optBoolean("canSendVoice", true);
+        rights.send_polls = !perms.optBoolean("canSendPolls", true);
+        rights.send_gifs = !perms.optBoolean("canSendGifs", true);
+        rights.send_stickers = rights.send_gifs;
+        rights.embed_links = !perms.optBoolean("canSendLinks", true);
+        rights.invite_users = !perms.optBoolean("canAddMembers", true);
+        rights.pin_messages = !perms.optBoolean("canPinMessages", true);
+        rights.change_info = !perms.optBoolean("canChangeGroupInfo", true);
+        rights.manage_topics = !perms.optBoolean("canManageTopics", true);
+        return rights;
     }
 
     // Last 7 hex chars (28 bits) of the Mongo ObjectId -> stable, always

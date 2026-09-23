@@ -12,6 +12,7 @@ import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_update;
 
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 
 /**
  * Realtime counterpart to RestBridge: keeps a Socket.IO connection to the
@@ -87,6 +88,11 @@ public class SocketBridge {
         socket.on("message_updated", args -> onMessageUpdated(args));
         socket.on("message_deleted", args -> onMessageDeleted(args));
         socket.on("message_reaction", args -> onMessageReaction(args));
+        socket.on("pins_updated", args -> onPinsUpdated(args));
+        socket.on("conversation_updated", args -> onConversationUpdated(args));
+        socket.on("removed_from_conversation", args -> refreshDialogs());
+        socket.on("member_kicked", args -> refreshDialogs());
+        socket.on("user_updated", args -> onUserUpdated(args));
         socket.on(Socket.EVENT_DISCONNECT, args ->
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
@@ -342,6 +348,124 @@ public class SocketBridge {
             updates.updates.add(RestBridge.editUpdateFor(message));
             updates.date = (int) (System.currentTimeMillis() / 1000L);
             deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // Pinned set per conversation, to turn the backend's "current pins"
+    // snapshots into pin/unpin updates.
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.Set<Integer>> pinnedByConversation = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void onPinsUpdated(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject data = (JSONObject) args[0];
+            String conversationId = data.optString("conversationId", "");
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
+            if (peer == null) {
+                return;
+            }
+            java.util.Set<Integer> now = new java.util.HashSet<>();
+            org.json.JSONArray pins = data.optJSONArray("pinnedMessages");
+            for (int i = 0; pins != null && i < pins.length(); i++) {
+                Object p = pins.opt(i);
+                String id = p instanceof JSONObject ? ((JSONObject) p).optString("_id", "") : String.valueOf(p);
+                if (id.length() == 24) {
+                    now.add(RestBridge.idFromMongoIdInt32(id));
+                    rest.rememberMessageId(id);
+                }
+            }
+            java.util.Set<Integer> before = pinnedByConversation.put(conversationId, now);
+            ArrayList<Integer> added = new ArrayList<>();
+            ArrayList<Integer> removed = new ArrayList<>();
+            for (Integer id : now) {
+                if (before == null || !before.contains(id)) added.add(id);
+            }
+            if (before != null) {
+                for (Integer id : before) {
+                    if (!now.contains(id)) removed.add(id);
+                }
+            }
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            if (!added.isEmpty()) updates.updates.add(pinUpdate(peer, added, true));
+            if (!removed.isEmpty()) updates.updates.add(pinUpdate(peer, removed, false));
+            if (updates.updates.isEmpty()) {
+                return;
+            }
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private static TLRPC.Update pinUpdate(TLRPC.Peer peer, ArrayList<Integer> ids, boolean pinned) {
+        if (peer.channel_id != 0) {
+            TL_update.TL_updatePinnedChannelMessages u = new TL_update.TL_updatePinnedChannelMessages();
+            u.channel_id = peer.channel_id;
+            u.messages.addAll(ids);
+            u.pinned = pinned;
+            return u;
+        }
+        TL_update.TL_updatePinnedMessages u = new TL_update.TL_updatePinnedMessages();
+        u.peer = peer;
+        u.messages.addAll(ids);
+        u.pinned = pinned;
+        return u;
+    }
+
+    // Group/channel info changed (title, photo, members, permissions...):
+    // refresh the cached chat object in place.
+    private void onConversationUpdated(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject conv = (JSONObject) args[0];
+            String type = conv.optString("type", "private");
+            if (!"group".equals(type) && !"channel".equals(type)) {
+                return;
+            }
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            ArrayList<TLRPC.Chat> chats = new ArrayList<>();
+            rest.buildConversationChat(conv, chats);
+            if (chats.isEmpty()) {
+                return;
+            }
+            Utilities.stageQueue.postRunnable(() -> {
+                MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
+                controller.putChats(chats, false);
+                AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(null, chats, true, true);
+                org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
+                        AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                                org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_CHAT));
+            });
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private void onUserUpdated(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject userJson = (JSONObject) args[0];
+            if (!userJson.has("_id")) {
+                return;
+            }
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            updates.users.add(rest.buildTLUser(userJson, userJson.getString("_id").equals(rest.getSelfMongoId())));
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+            org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
+                    AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                            org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_NAME | MessagesController.UPDATE_MASK_AVATAR));
         } catch (Exception e) {
             FileLog.e(e);
         }
