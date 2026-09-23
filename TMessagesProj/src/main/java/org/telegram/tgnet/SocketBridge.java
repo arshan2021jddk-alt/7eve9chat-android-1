@@ -6,6 +6,7 @@ import io.socket.client.Socket;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.FileLog;
+import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_update;
@@ -82,11 +83,19 @@ public class SocketBridge {
         socket.on("typing", args -> onTyping(args, true));
         socket.on("stop_typing", args -> onTyping(args, false));
         socket.on("new_conversation", args -> refreshDialogs());
+        socket.on("conversation_deleted", args -> refreshDialogs());
+        socket.on("message_updated", args -> onMessageUpdated(args));
+        socket.on("message_deleted", args -> onMessageDeleted(args));
+        socket.on(Socket.EVENT_DISCONNECT, args ->
+                ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
         socket.on(Socket.EVENT_CONNECT, args -> {
+            ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnected);
             for (String room : conversationRooms) {
                 connectedSocket.emit("join_conversation", room);
             }
+            // Catch up on anything sent while we were offline.
+            refreshDialogs();
         });
         socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
             if (args.length > 0) {
@@ -132,24 +141,22 @@ public class SocketBridge {
                 return;
             }
             RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
             TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
             if (peer == null) {
-                // Unknown conversation (e.g. someone messaged us for the
-                // first time) - safest is a full dialog list refresh rather
-                // than guessing at a peer.
-                refreshDialogs();
-                return;
+                // First message of a chat we haven't listed yet (e.g.
+                // someone messaged us for the first time): fetch and
+                // register it, then deliver the message into it.
+                peer = rest.registerConversationById(conversationId, updates.users, updates.chats);
+                if (peer == null) {
+                    refreshDialogs();
+                    return;
+                }
+                rest.joinConversationRoom(conversationId);
             }
 
             TLRPC.TL_message message = rest.buildTLMessage(m, peer);
-
-            TL_update.TL_updateNewMessage update = new TL_update.TL_updateNewMessage();
-            update.message = message;
-            update.pts = 0;
-            update.pts_count = 0;
-
-            TLRPC.TL_updates updates = new TLRPC.TL_updates();
-            updates.updates.add(update);
+            updates.updates.add(RestBridge.newMessageUpdateFor(message));
             updates.date = message.date;
             updates.seq = 0;
 
@@ -266,7 +273,7 @@ public class SocketBridge {
                 update = u;
             } else {
                 TL_update.TL_updateChatUserTyping u = new TL_update.TL_updateChatUserTyping();
-                u.chat_id = ((TLRPC.TL_peerChat) convPeer).chat_id;
+                u.chat_id = convPeer.chat_id != 0 ? convPeer.chat_id : convPeer.channel_id;
                 TLRPC.TL_peerUser fromPeer = new TLRPC.TL_peerUser();
                 fromPeer.user_id = RestBridge.idFromMongoId(userId);
                 u.from_id = fromPeer;
@@ -294,13 +301,83 @@ public class SocketBridge {
         });
     }
 
+    // Applies the updates directly instead of via processUpdates(): that
+    // path validates pts sequences and, on any gap or unknown user/chat,
+    // falls back to updates.getDifference - which this backend has no
+    // equivalent of, so the message would just be dropped until the app
+    // was restarted.
     private void deliver(TLRPC.Updates updates) {
         Utilities.stageQueue.postRunnable(() -> {
             try {
-                AccountInstance.getInstance(currentAccount).getMessagesController().processUpdates(updates, false);
+                MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
+                controller.putUsers(updates.users, false);
+                controller.putChats(updates.chats, false);
+                AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(updates.users, updates.chats, true, true);
+                controller.processUpdateArray(updates.updates, updates.users, updates.chats, false, updates.date);
             } catch (Exception e) {
                 FileLog.e(e);
             }
         });
+    }
+
+    private void onMessageUpdated(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject data = (JSONObject) args[0];
+            JSONObject full = data.optJSONObject("fullMessage");
+            if (full == null) {
+                return;
+            }
+            String conversationId = full.optString("conversationId", data.optString("conversationId", ""));
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
+            if (peer == null) {
+                return;
+            }
+            TLRPC.TL_message message = rest.buildTLMessage(full, peer);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            updates.updates.add(RestBridge.editUpdateFor(message));
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private void onMessageDeleted(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject data = (JSONObject) args[0];
+            String messageId = data.optString("messageId", "");
+            String conversationId = data.optString("conversationId", "");
+            if (messageId.isEmpty() || conversationId.isEmpty()) {
+                return;
+            }
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
+            if (peer == null) {
+                return;
+            }
+            int tlId = RestBridge.idFromMongoIdInt32(messageId);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            if (peer.channel_id != 0) {
+                TL_update.TL_updateDeleteChannelMessages u = new TL_update.TL_updateDeleteChannelMessages();
+                u.channel_id = peer.channel_id;
+                u.messages.add(tlId);
+                updates.updates.add(u);
+            } else {
+                TL_update.TL_updateDeleteMessages u = new TL_update.TL_updateDeleteMessages();
+                u.messages.add(tlId);
+                updates.updates.add(u);
+            }
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 }

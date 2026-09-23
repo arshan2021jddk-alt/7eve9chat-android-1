@@ -207,7 +207,11 @@ public class ConnectionsManager extends BaseController {
 
     public ConnectionsManager(int instance) {
         super(instance);
-        connectionState = native_getConnectionState(currentAccount);
+        // 7eve9chat: the native layer is kept offline on purpose (see
+        // checkConnection), so its state is always "waiting for network".
+        // Our real link is RestBridge/SocketBridge, which report through
+        // setRestConnectionState().
+        connectionState = ConnectionStateConnecting;
         String deviceModel;
         String systemLangCode;
         String langCode;
@@ -842,6 +846,20 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onConnectionStateChanged(final int state, final int currentAccount) {
+        // 7eve9chat: ignore the (deliberately offline) native layer.
+    }
+
+    public void setRestConnectionState(final int state) {
+        AndroidUtilities.runOnUIThread(() -> {
+            if (connectionState == state) {
+                return;
+            }
+            connectionState = state;
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.didUpdateConnectionState);
+        });
+    }
+
+    private static void unusedNativeConnectionStateChanged(final int state, final int currentAccount) {
         AndroidUtilities.runOnUIThread(() -> {
             getInstance(currentAccount).connectionState = state;
             AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.didUpdateConnectionState);
