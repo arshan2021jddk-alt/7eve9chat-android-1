@@ -140,6 +140,7 @@ public class RestBridge {
         loadPeerMap(prefs().getString("peerMapUser", null), conversationIdByUserPeer);
         loadPeerMap(prefs().getString("peerMapChat", null), conversationIdByChatPeer);
         loadPeerMap(prefs().getString("mediaMap", null), mediaUrlById);
+        buildAvailableReactions();
     }
 
     private static void loadPeerMap(String json, HashMap<Long, String> target) {
@@ -203,6 +204,126 @@ public class RestBridge {
             }
         }
         return null;
+    }
+
+    // ---------------------------------------------------------------
+    // Reactions. The set and the exact emoji strings match the website's
+    // picker, so a reaction looks the same on both sides. Artwork is
+    // Twemoji (CC-BY 4.0) converted to vector .tgs by the backend's
+    // scripts/build-reactions.py and served from /uploads/reactions/.
+    // ---------------------------------------------------------------
+    private static final String[][] REACTIONS = {
+            {"👍", "1f44d", "Thumbs Up"},
+            {"❤️", "2764", "Red Heart"},
+            {"😂", "1f602", "Tears of Joy"},
+            {"😮", "1f62e", "Surprised"},
+            {"😢", "1f622", "Crying"},
+            {"🙏", "1f64f", "Folded Hands"},
+            {"🔥", "1f525", "Fire"},
+            {"😍", "1f60d", "Heart Eyes"},
+            {"👏", "1f44f", "Clapping"},
+            {"🎉", "1f389", "Party"},
+            {"🤔", "1f914", "Thinking"},
+            {"😡", "1f621", "Angry"},
+            {"👎", "1f44e", "Thumbs Down"},
+            {"💯", "1f4af", "Hundred"},
+            {"🤩", "1f929", "Star-Struck"},
+            {"😁", "1f601", "Grinning"},
+    };
+
+    private TLRPC.TL_document buildTgsDocument(String url) {
+        TLRPC.TL_document document = new TLRPC.TL_document();
+        document.id = idForUrl(url);
+        document.access_hash = 0;
+        document.file_reference = new byte[0];
+        document.date = 1;
+        document.mime_type = "application/x-tgsticker";
+        document.size = 0;
+        document.dc_id = 1;
+        TLRPC.TL_documentAttributeImageSize imageSize = new TLRPC.TL_documentAttributeImageSize();
+        imageSize.w = 512;
+        imageSize.h = 512;
+        document.attributes.add(imageSize);
+        TLRPC.TL_documentAttributeFilename name = new TLRPC.TL_documentAttributeFilename();
+        name.file_name = "reaction.tgs";
+        document.attributes.add(name);
+        return document;
+    }
+
+    TLRPC.TL_messages_availableReactions buildAvailableReactions() {
+        TLRPC.TL_messages_availableReactions result = new TLRPC.TL_messages_availableReactions();
+        result.hash = 7979;
+        for (String[] r : REACTIONS) {
+            String base = "https://7eve9craft.ir/uploads/reactions/" + r[1];
+            TLRPC.TL_document loop = buildTgsDocument(base + ".tgs");
+            TLRPC.TL_document appear = buildTgsDocument(base + "_appear.tgs");
+            TLRPC.TL_document effect = buildTgsDocument(base + "_effect.tgs");
+            TLRPC.TL_availableReaction reaction = new TLRPC.TL_availableReaction();
+            reaction.reaction = r[0];
+            reaction.title = r[2];
+            reaction.static_icon = loop;
+            reaction.appear_animation = appear;
+            reaction.select_animation = loop;
+            reaction.activate_animation = appear;
+            reaction.effect_animation = effect;
+            reaction.around_animation = effect;
+            reaction.center_icon = loop;
+            reaction.flags |= TLObject.FLAG_1; // around_animation + center_icon present
+            result.reactions.add(reaction);
+        }
+        return result;
+    }
+
+    // [{user, emoji}] -> grouped counts, marking my own one as chosen.
+    TLRPC.TL_messageReactions buildMessageReactions(JSONArray reactions) {
+        if (reactions == null || reactions.length() == 0) {
+            return null;
+        }
+        java.util.LinkedHashMap<String, Integer> counts = new java.util.LinkedHashMap<>();
+        String mine = null;
+        for (int i = 0; i < reactions.length(); i++) {
+            JSONObject r = reactions.optJSONObject(i);
+            if (r == null) continue;
+            String emoji = r.optString("emoji", "");
+            if (emoji.isEmpty()) continue;
+            Integer c = counts.get(emoji);
+            counts.put(emoji, c == null ? 1 : c + 1);
+            if (selfMongoId != null && selfMongoId.equals(refId(r, "user"))) {
+                mine = emoji;
+            }
+        }
+        if (counts.isEmpty()) {
+            return null;
+        }
+        TLRPC.TL_messageReactions result = new TLRPC.TL_messageReactions();
+        result.can_see_list = false;
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            TLRPC.TL_reactionCount count = new TLRPC.TL_reactionCount();
+            TLRPC.TL_reactionEmoji emoji = new TLRPC.TL_reactionEmoji();
+            emoji.emoticon = e.getKey();
+            count.reaction = emoji;
+            count.count = e.getValue();
+            if (e.getKey().equals(mine)) {
+                count.chosen = true;
+                count.chosen_order = 1;
+                count.flags |= TLObject.FLAG_0;
+            }
+            result.results.add(count);
+        }
+        return result;
+    }
+
+    TLRPC.Update reactionsUpdate(TLRPC.InputPeer inputPeer, int msgId, JSONArray reactions) {
+        return reactionsUpdate(peerFromInput(inputPeer), msgId, reactions);
+    }
+
+    TLRPC.Update reactionsUpdate(TLRPC.Peer peer, int msgId, JSONArray reactions) {
+        TL_update.TL_updateMessageReactions update = new TL_update.TL_updateMessageReactions();
+        update.peer = peer;
+        update.msg_id = msgId;
+        TLRPC.TL_messageReactions built = buildMessageReactions(reactions);
+        update.reactions = built != null ? built : new TLRPC.TL_messageReactions();
+        return update;
     }
 
     void joinConversationRoom(String conversationId) {
@@ -604,6 +725,10 @@ public class RestBridge {
             if (request instanceof TLRPC.TL_messages_editChatPhoto) {
                 TLRPC.TL_messages_editChatPhoto req = (TLRPC.TL_messages_editChatPhoto) request;
                 handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getAvailableReactions) {
+                complete(onComplete, buildAvailableReactions(), null);
                 return true;
             }
             if (request instanceof TLRPC.TL_updates_getState) {
@@ -2243,6 +2368,11 @@ public class RestBridge {
                     body.put("emoji", emoji);
                     JSONObject updated = request("POST", "/messages/" + mongoId + "/react", body, true);
                     rememberMyReaction(mongoId, updated.optJSONArray("reactions"));
+                    TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                    updates.updates.add(reactionsUpdate(req.peer, req.msg_id, updated.optJSONArray("reactions")));
+                    updates.date = (int) (System.currentTimeMillis() / 1000L);
+                    complete(onComplete, updates, null);
+                    return;
                 }
                 // Removing a reaction (empty list) isn't distinguishable from
                 // "react with nothing" on this backend's toggle endpoint - the
@@ -3102,6 +3232,8 @@ public class RestBridge {
                 full.about = conv.optString("description", "");
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.chat_photo = buildFullChatPhoto(conv);
+                full.available_reactions = new TLRPC.TL_chatReactionsAll();
+                full.flags |= TLObject.FLAG_18;
 
                 TLRPC.TL_chatParticipants participants = new TLRPC.TL_chatParticipants();
                 participants.chat_id = req.chat_id;
@@ -3135,6 +3267,8 @@ public class RestBridge {
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.chat_photo = buildFullChatPhoto(conv);
                 full.can_set_username = selfMongoId != null && selfMongoId.equals(refId(conv, "owner"));
+                full.available_reactions = new TLRPC.TL_chatReactionsAll();
+                full.flags |= TLObject.FLAG_30;
                 full.can_view_participants = true;
                 JSONArray participantsJson = conv.optJSONArray("participants");
                 if (participantsJson != null) {
@@ -3619,6 +3753,11 @@ public class RestBridge {
         }
 
         rememberMyReaction(mongoMessageId, m.optJSONArray("reactions"));
+        TLRPC.TL_messageReactions reactions = buildMessageReactions(m.optJSONArray("reactions"));
+        if (reactions != null) {
+            msg.reactions = reactions;
+            msg.flags |= TLObject.FLAG_20;
+        }
 
         JSONObject sender = m.optJSONObject("sender");
         String senderId = sender != null ? sender.optString("_id", null) : m.optString("sender", null);

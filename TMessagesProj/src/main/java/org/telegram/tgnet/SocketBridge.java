@@ -86,6 +86,7 @@ public class SocketBridge {
         socket.on("conversation_deleted", args -> refreshDialogs());
         socket.on("message_updated", args -> onMessageUpdated(args));
         socket.on("message_deleted", args -> onMessageDeleted(args));
+        socket.on("message_reaction", args -> onMessageReaction(args));
         socket.on(Socket.EVENT_DISCONNECT, args ->
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
@@ -339,6 +340,33 @@ public class SocketBridge {
             TLRPC.TL_message message = rest.buildTLMessage(full, peer);
             TLRPC.TL_updates updates = new TLRPC.TL_updates();
             updates.updates.add(RestBridge.editUpdateFor(message));
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private void onMessageReaction(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject data = (JSONObject) args[0];
+            String messageId = data.optString("messageId", "");
+            String conversationId = data.optString("conversationId", "");
+            if (messageId.isEmpty() || conversationId.isEmpty()) {
+                return;
+            }
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
+            if (peer == null) {
+                return;
+            }
+            org.json.JSONArray reactions = data.optJSONArray("reactions");
+            rest.rememberMyReaction(messageId, reactions);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            updates.updates.add(rest.reactionsUpdate(peer, RestBridge.idFromMongoIdInt32(messageId), reactions));
             updates.date = (int) (System.currentTimeMillis() / 1000L);
             deliver(updates);
         } catch (Exception e) {
