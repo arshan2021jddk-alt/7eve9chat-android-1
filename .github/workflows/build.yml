@@ -32,16 +32,32 @@ jobs:
 
           docker image prune -af || true
 
+      - name: Install 7eve9Chat signing key
+        env:
+          SEVEN_KEYSTORE_B64: ${{ secrets.SEVEN_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$SEVEN_KEYSTORE_B64" ]; then
+            echo "$SEVEN_KEYSTORE_B64" | base64 -d > TMessagesProj/config/release.keystore
+            echo "Using the 7eve9Chat signing key"
+          else
+            echo "::warning::SEVEN_KEYSTORE_B64 secret not set - signing with the repository's default key"
+          fi
+
       - name: Build Docker image
         run: |
           docker build -t telegram-build .
 
       - name: Build arm64 debug APK
+        env:
+          SEVEN_KEY_ALIAS: ${{ secrets.SEVEN_KEY_ALIAS }}
+          SEVEN_STORE_PASSWORD: ${{ secrets.SEVEN_STORE_PASSWORD }}
+          SEVEN_KEY_PASSWORD: ${{ secrets.SEVEN_KEY_PASSWORD }}
         run: |
           set -Eeuo pipefail
 
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/home/source" \
+            -e SEVEN_KEY_ALIAS -e SEVEN_STORE_PASSWORD -e SEVEN_KEY_PASSWORD \
             telegram-build \
             bash -lc '
               set -Eeuo pipefail
@@ -51,7 +67,12 @@ jobs:
 
               cd /home/gradle
 
-              gradle :TMessagesProj_App:assembleAfatciDebug \
+              SIGNING_ARGS=()
+              if [ -n "${SEVEN_STORE_PASSWORD:-}" ]; then
+                SIGNING_ARGS=(-PRELEASE_KEY_ALIAS="$SEVEN_KEY_ALIAS" -PRELEASE_STORE_PASSWORD="$SEVEN_STORE_PASSWORD" -PRELEASE_KEY_PASSWORD="$SEVEN_KEY_PASSWORD")
+              fi
+
+              gradle :TMessagesProj_App:assembleAfatciDebug ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
                 --stacktrace \
                 --console=plain
 
