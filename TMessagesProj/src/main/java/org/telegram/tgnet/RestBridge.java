@@ -4153,10 +4153,17 @@ public class RestBridge {
                 update.id = idFromMongoIdInt32(sent.getString("_id"));
                 update.date = parseIsoToEpochSeconds(sent.optString("createdAt", null));
                 update.out = true;
-                update.entities = new ArrayList<>();
+                // The app replaces the sent message's entities with these, so
+                // they must be the same ones the server copy gets (clickable
+                // links / @usernames / #tags + the sender's formatting).
+                update.entities = parseEntities(req.message);
+                update.entities.addAll(entitiesFromJson(sent.optJSONArray("entities")));
                 update.pts = 0;
                 update.pts_count = 0;
                 update.flags = update.media != null ? TLObject.FLAG_9 : 0;
+                if (!update.entities.isEmpty()) {
+                    update.flags |= TLObject.FLAG_7;
+                }
                 complete(onComplete, update, null);
             } catch (RestException e) {
                 complete(onComplete, null, restError(e.statusCode, e.message));
@@ -4567,8 +4574,15 @@ public class RestBridge {
                 // Gifts tab only shows when the count is known to be > 0.
                 try {
                     JSONArray gifts = requestArray("GET", "/gifts/user/" + userJson.getString("_id"), null, true);
-                    if (gifts.length() > 0) {
-                        full.stargifts_count = gifts.length();
+                    int shown = 0;
+                    for (int gi = 0; gi < gifts.length(); gi++) {
+                        JSONObject g = gifts.optJSONObject(gi);
+                        if (g == null || !g.optBoolean("isVisibleInProfile", true)) continue;
+                        if (g.optString("thumbnailUrl", "").isEmpty() && g.optString("animationUrl", "").isEmpty()) continue;
+                        shown++;
+                    }
+                    if (shown > 0) {
+                        full.stargifts_count = shown;
                         full.flags2 |= TLObject.FLAG_8;
                     }
                 } catch (Exception e) {
@@ -8621,6 +8635,7 @@ public class RestBridge {
                 msg.message = "";
             }
             applyMediaInfo(msg.media, m.optLong("fileSize", 0), m.optJSONObject("mediaMeta"));
+            applyStrippedThumb(msg.media, jsonStr(m, "thumb"));
             if (m.optBoolean("hasSpoiler", false)) {
                 msg.media.spoiler = true;
             }
@@ -8966,6 +8981,30 @@ public class RestBridge {
             photo.flags |= TLObject.FLAG_1; // video_sizes present
         }
         return photo;
+    }
+
+    // Server-made Telegram "stripped" thumbnail (base64, ~40px JPEG body):
+    // the blurred cover shown before a photo / video / GIF is downloaded.
+    private static void applyStrippedThumb(TLRPC.MessageMedia media, String base64) {
+        if (media == null || base64 == null || base64.isEmpty()) return;
+        byte[] bytes;
+        try {
+            bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
+        } catch (Exception e) {
+            return;
+        }
+        if (bytes.length < 4 || bytes[0] != 1) return;
+        TLRPC.TL_photoStrippedSize stripped = new TLRPC.TL_photoStrippedSize();
+        stripped.type = "i";
+        stripped.bytes = bytes;
+        stripped.h = bytes[1] & 0xFF;
+        stripped.w = bytes[2] & 0xFF;
+        if (media.photo != null) {
+            media.photo.sizes.add(0, stripped);
+        } else if (media.document != null) {
+            media.document.thumbs.add(stripped);
+            media.document.flags |= 1; // thumbs present
+        }
     }
 
     // Real size (lets the app stream videos / show progress) and the
@@ -10151,7 +10190,56 @@ public class RestBridge {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Own-message echoes. The backend emits "new_message" to every
+    // participant, the sender included, before it answers the send request.
+    // Telegram never echoes a device's own send back to it (the send response
+    // carries the message), and applying both made brand-new chats glitch
+    // until reopened. So while a send is in flight socket messages wait, and
+    // messages this device sent are dropped once the response has them.
+    // ---------------------------------------------------------------
+    private final java.util.concurrent.atomic.AtomicInteger ownSendsInFlight = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.Map<String, Boolean> ownSentIds = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<String, Boolean>(64, 0.75f, false) {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+            return size() > 500;
+        }
+    });
+    private static final java.util.regex.Pattern MONGO_ID_FIELD = java.util.regex.Pattern.compile("\"_id\"\\s*:\\s*\"([0-9a-f]{24})\"");
+
+    private static boolean isOwnSendPath(String method, String path) {
+        return "POST".equals(method) && ("/messages".equals(path) || "/messages/forward".equals(path));
+    }
+
+    private void rememberOwnSent(String responseText) {
+        if (responseText == null) return;
+        java.util.regex.Matcher m = MONGO_ID_FIELD.matcher(responseText);
+        while (m.find()) {
+            ownSentIds.put(m.group(1), Boolean.TRUE);
+        }
+    }
+
+    boolean isOwnSendInFlight() {
+        return ownSendsInFlight.get() > 0;
+    }
+
+    boolean wasSentByThisDevice(String mongoId) {
+        return mongoId != null && ownSentIds.containsKey(mongoId);
+    }
+
     private String requestText(String method, String path, JSONObject body, boolean auth) throws Exception {
+        final boolean ownSend = isOwnSendPath(method, path);
+        if (ownSend) ownSendsInFlight.incrementAndGet();
+        try {
+            String text = requestTextRaw(method, path, body, auth);
+            if (ownSend) rememberOwnSent(text);
+            return text;
+        } finally {
+            if (ownSend) ownSendsInFlight.decrementAndGet();
+        }
+    }
+
+    private String requestTextRaw(String method, String path, JSONObject body, boolean auth) throws Exception {
         URL url = new URL(BASE_URL + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         try {
@@ -10194,6 +10282,16 @@ public class RestBridge {
     // multipart/form-data upload of a single file (+ optional text fields),
     // for the backend's multer-based endpoints.
     private JSONObject requestMultipart(String method, String path, JSONObject fields, String fileField, java.io.File file, String fileName, String mimeType) throws Exception {
+        final boolean ownSend = isOwnSendPath(method, path);
+        if (ownSend) ownSendsInFlight.incrementAndGet();
+        try {
+            return requestMultipartRaw(method, path, fields, fileField, file, fileName, mimeType, ownSend);
+        } finally {
+            if (ownSend) ownSendsInFlight.decrementAndGet();
+        }
+    }
+
+    private JSONObject requestMultipartRaw(String method, String path, JSONObject fields, String fileField, java.io.File file, String fileName, String mimeType, boolean ownSend) throws Exception {
         String boundary = "----7eve9chat" + System.currentTimeMillis();
         URL url = new URL(BASE_URL + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -10241,6 +10339,7 @@ public class RestBridge {
                 }
                 throw new RestException(code, msg);
             }
+            if (ownSend) rememberOwnSent(text);
             try {
                 return text != null && text.length() > 0 ? new JSONObject(text) : new JSONObject();
             } catch (Exception parseErr) {

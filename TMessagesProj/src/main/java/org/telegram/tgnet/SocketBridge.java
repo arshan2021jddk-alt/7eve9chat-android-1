@@ -93,6 +93,7 @@ public class SocketBridge {
         socket.on("removed_from_conversation", args -> refreshDialogs());
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
+        socket.on("gifts_changed", args -> onGiftsChanged(args));
         socket.on("callUser", args -> {
             if (args.length > 0 && args[0] instanceof JSONObject) {
                 org.telegram.ui.PrivateCallActivity.onIncomingCall(currentAccount, (JSONObject) args[0]);
@@ -176,11 +177,25 @@ public class SocketBridge {
     }
 
     private void onNewMessage(Object... args) {
+        if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+            return;
+        }
+        handleNewMessage((JSONObject) args[0], 0);
+    }
+
+    // See RestBridge "Own-message echoes": wait while this device is sending,
+    // then drop the echo of a message it sent itself.
+    private void handleNewMessage(JSONObject m, int waitedMs) {
+        RestBridge restBridge = RestBridge.getInstance(currentAccount);
+        String mongoId = m.optString("_id", null);
+        if (restBridge.wasSentByThisDevice(mongoId)) {
+            return;
+        }
+        if (restBridge.isOwnSendInFlight() && waitedMs < 30000) {
+            Utilities.globalQueue.postRunnable(() -> handleNewMessage(m, waitedMs + 250), 250);
+            return;
+        }
         try {
-            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
-                return;
-            }
-            JSONObject m = (JSONObject) args[0];
             String conversationId = m.optString("conversationId", null);
             if (conversationId == null) {
                 return;
@@ -485,6 +500,48 @@ public class SocketBridge {
                 org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
                         AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
                                 org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_CHAT));
+            });
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // A gift was given / removed / edited: refresh that profile's gift shelf live.
+    private void onGiftsChanged(Object... args) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject payload = (JSONObject) args[0];
+            String userId = payload.optString("userId", "");
+            if (userId.isEmpty()) {
+                return;
+            }
+            final long dialogId = RestBridge.idFromMongoId(userId);
+            final int count = payload.optInt("count", -1);
+            org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+                MessagesController controller = MessagesController.getInstance(currentAccount);
+                TLRPC.UserFull full = controller.getUserFull(dialogId);
+                if (full != null && count >= 0) {
+                    full.stargifts_count = count;
+                    if (count > 0) {
+                        full.flags2 |= TLObject.FLAG_8;
+                    } else {
+                        full.flags2 &= ~TLObject.FLAG_8;
+                    }
+                }
+                org.telegram.ui.Stars.StarsController stars = org.telegram.ui.Stars.StarsController.getInstance(currentAccount);
+                org.telegram.ui.Stars.StarsController.GiftsList list = stars.getProfileGiftsList(dialogId, false);
+                if (list != null) {
+                    list.invalidate(true);
+                }
+                org.telegram.ui.Stars.StarsController.GiftsCollections collections = stars.giftCollections.get(dialogId);
+                if (collections != null) {
+                    collections.invalidate(false);
+                }
+                if (full != null) {
+                    org.telegram.messenger.NotificationCenter.getInstance(currentAccount).postNotificationName(org.telegram.messenger.NotificationCenter.userInfoDidLoad, dialogId, full);
+                }
             });
         } catch (Exception e) {
             FileLog.e(e);

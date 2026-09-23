@@ -1575,6 +1575,33 @@ public class GiftSheet extends BottomSheetWithRecyclerListView implements Notifi
             return false;
         }
 
+        // 7eve9: gifts made in the admin panel are plain pictures (jpg/png/gif),
+        // not stickers. Those fill the whole card with rounded corners.
+        public static boolean isPictureGift(TLRPC.Document document) {
+            return document != null && document.mime_type != null && document.mime_type.startsWith("image/");
+        }
+
+        private boolean pictureMode;
+        private void applyPictureLayout(boolean picture) {
+            if (picture) {
+                imageViewLayoutParams.width = LayoutHelper.MATCH_PARENT;
+                imageViewLayoutParams.height = LayoutHelper.MATCH_PARENT;
+                imageViewLayoutParams.gravity = Gravity.FILL;
+                imageViewLayoutParams.leftMargin = imageViewLayoutParams.rightMargin = dp(CardBackground.PADDING_HORIZONTAL_DP);
+                imageViewLayoutParams.topMargin = imageViewLayoutParams.bottomMargin = dp(CardBackground.PADDING_VERTICAL_DP);
+                imageView.setRoundRadius(dp(11));
+                priceView.setTextColor(0xFFFFFFFF);
+                priceBackground.setBackground(new StarsBackground(0x80000000));
+            } else if (pictureMode) {
+                imageViewLayoutParams.width = dp(80);
+                imageViewLayoutParams.height = dp(80);
+                imageViewLayoutParams.leftMargin = imageViewLayoutParams.rightMargin = 0;
+                imageView.setRoundRadius(0);
+            }
+            pictureMode = picture;
+            imageView.setLayoutParams(imageViewLayoutParams);
+        }
+
         private TLRPC.Document lastDocument;
         private long lastDocumentId;
         private void setSticker(TLRPC.Document document, Object parentObject) {
@@ -1592,6 +1619,10 @@ public class GiftSheet extends BottomSheetWithRecyclerListView implements Notifi
             TLRPC.PhotoSize photoSize = FileLoader.getClosestPhotoSizeWithSize(document.thumbs, dp(100));
             SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(document, Theme.key_windowBackgroundGray, 0.3f);
 
+            if (isPictureGift(document)) {
+                imageView.setImage(ImageLocation.getForDocument(document), "200_200", null, null, parentObject);
+                return;
+            }
             imageView.setImage(
                 ImageLocation.getForDocument(document), "80_80_nolimit_pcache",
                 ImageLocation.getForDocument(photoSize, document), "80_80_nolimit_pcache",
@@ -1874,6 +1905,7 @@ public class GiftSheet extends BottomSheetWithRecyclerListView implements Notifi
                 ((MarginLayoutParams) priceLayout.getLayoutParams()).topMargin = dp(103);
             }
             starsPriceView.setVisibility(View.GONE);
+            applyPictureLayout(isPictureGift(userGift.gift.getDocument()));
 
             lastUserGift = userGift;
             lastTier = null;

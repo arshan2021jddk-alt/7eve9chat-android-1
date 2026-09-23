@@ -2480,6 +2480,8 @@ public class StarGiftSheet extends BottomSheetWithRecyclerListView implements No
 //                });
 //            } else {
                 setGiftImage(imageView[page].getImageReceiver(), gift, 160);
+                // 7eve9 picture gifts: soft rounded corners instead of a hard square edge
+                imageView[page].getImageReceiver().setRoundRadius(GiftSheet.GiftCell.isPictureGift(gift.getDocument()) ? dp(28) : 0);
                 imageViewAttributes[page] = findAttribute(gift.attributes, TL_stars.starGiftAttributeModel.class);
 //            }
             onSwitchPage(currentPage);
