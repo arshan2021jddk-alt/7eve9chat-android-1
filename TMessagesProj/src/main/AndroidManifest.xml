@@ -482,6 +482,14 @@
             android:foregroundServiceType="mediaPlayback"
         />
         <activity
+            android:name="org.telegram.ui.PrivateCallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+        <activity
             android:name="org.telegram.ui.GroupVoiceChatActivity"
             android:exported="false"
             android:screenOrientation="portrait"

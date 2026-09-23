@@ -74,6 +74,13 @@ public class VoIPHelper {
 	private static final int VOIP_SUPPORT_ID = 4244000;
 
 	public static void startCall(TLRPC.User user, boolean videoCall, boolean canVideoCall, final Activity activity, TLRPC.UserFull userFull, AccountInstance accountInstance) {
+		// 7eve9chat: calls go through our own WebRTC call (compatible with the website)
+		if (activity != null && user != null) {
+			org.telegram.ui.PrivateCallActivity.startOutgoing(activity, accountInstance.getCurrentAccount(), user, videoCall);
+		}
+		if (true) {
+			return;
+		}
 		if (accountInstance == null ? MessagesController.getInstance(UserConfig.selectedAccount).isFrozen() : accountInstance.getMessagesController().isFrozen()) {
 			AccountFrozenAlert.show(accountInstance == null ? UserConfig.selectedAccount : accountInstance.getCurrentAccount());
 			return;

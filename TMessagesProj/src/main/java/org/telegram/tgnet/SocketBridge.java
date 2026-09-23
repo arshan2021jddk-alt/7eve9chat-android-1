@@ -93,6 +93,11 @@ public class SocketBridge {
         socket.on("removed_from_conversation", args -> refreshDialogs());
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
+        socket.on("callUser", args -> {
+            if (args.length > 0 && args[0] instanceof JSONObject) {
+                org.telegram.ui.PrivateCallActivity.onIncomingCall(currentAccount, (JSONObject) args[0]);
+            }
+        });
         socket.on(Socket.EVENT_DISCONNECT, args ->
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
@@ -195,7 +200,7 @@ public class SocketBridge {
                 rest.joinConversationRoom(conversationId);
             }
 
-            TLRPC.TL_message message = rest.buildTLMessage(m, peer);
+            TLRPC.Message message = rest.buildAnyMessage(m, peer);
             updates.updates.add(RestBridge.newMessageUpdateFor(message));
             updates.date = message.date;
             updates.seq = 0;

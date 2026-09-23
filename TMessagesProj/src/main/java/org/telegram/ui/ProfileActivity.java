@@ -10669,20 +10669,14 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 if (premiumRow >= 0 || starsRow >= 0 || tonRow >= 0 || businessRow >= 0 || premiumGiftingRow >= 0) {
                     premiumSectionsRow = rowCount++;
                 }
-                helpHeaderRow = rowCount++;
-                questionRow = rowCount++;
-                faqRow = rowCount++;
-                policyRow = rowCount++;
-                if (BuildVars.LOGS_ENABLED || BuildVars.DEBUG_PRIVATE_VERSION) {
+                // 7eve9chat: Telegram's support/FAQ/policy links don't apply here
+                // 7eve9chat: debug/log tools hidden from users
+                if (false) {
                     helpSectionCell = rowCount++;
                     debugHeaderRow = rowCount++;
-                }
-                if (BuildVars.LOGS_ENABLED) {
                     sendLogsRow = rowCount++;
                     sendLastLogsRow = rowCount++;
                     clearLogsRow = rowCount++;
-                }
-                if (BuildVars.DEBUG_VERSION) {
                     switchBackendRow = rowCount++;
                 }
                 versionRow = rowCount++;
