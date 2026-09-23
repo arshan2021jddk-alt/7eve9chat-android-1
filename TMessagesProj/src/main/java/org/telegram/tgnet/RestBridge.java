@@ -756,6 +756,46 @@ public class RestBridge {
                 handleEditConversationPhoto(req.chat_id, req.photo, false, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_requestWebView) {
+                TLRPC.TL_messages_requestWebView req = (TLRPC.TL_messages_requestWebView) request;
+                handleRequestWebApp(req.bot, req.url, req.from_bot_menu ? "menu" : "inline", req.peer, req.start_param, req.theme_params, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_requestSimpleWebView) {
+                TLRPC.TL_messages_requestSimpleWebView req = (TLRPC.TL_messages_requestSimpleWebView) request;
+                handleRequestWebApp(req.bot, req.url, "simple", null, req.start_param, req.theme_params, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_requestMainWebView) {
+                TLRPC.TL_messages_requestMainWebView req = (TLRPC.TL_messages_requestMainWebView) request;
+                handleRequestWebApp(req.bot, null, "main", req.peer, req.start_param, req.theme_params, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_prolongWebView) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_sendWebViewData) {
+                handleSendWebViewData((TLRPC.TL_messages_sendWebViewData) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_report) {
+                handleReportMessages((TLRPC.TL_messages_report) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.reportPeer) {
+                TL_account.reportPeer req = (TL_account.reportPeer) request;
+                sendReport(req.peer, null, "profile", req.message, onComplete, new TLRPC.TL_boolTrue());
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_reportSpam) {
+                sendReport(((TLRPC.TL_messages_reportSpam) request).peer, null, "spam", "", onComplete, new TLRPC.TL_boolTrue());
+                return true;
+            }
+            if (request instanceof TL_account.toggleUsername || request instanceof TL_account.reorderUsernames) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                return true;
+            }
             if (request instanceof TLRPC.TL_channels_inviteToChannel) {
                 handleInviteToChannel((TLRPC.TL_channels_inviteToChannel) request, onComplete);
                 return true;
@@ -1527,7 +1567,9 @@ public class RestBridge {
             try {
                 String convId = resolveConversationId(req.peer);
                 if (convId != null) {
-                    request("DELETE", "/conversations/" + convId, null, true);
+                    // "Also delete for <name>" (revoke) removes it for both
+                    // sides; otherwise it's only hidden for me.
+                    request("DELETE", "/conversations/" + convId + (req.revoke ? "" : "?forMe=1"), null, true);
                 }
                 complete(onComplete, new TLRPC.TL_messages_affectedHistory(), null);
             } catch (RestException e) {
@@ -2216,6 +2258,124 @@ public class RestBridge {
     }
 
     // ---------------------------------------------------------------
+    // Mini apps (Telegram Web Apps): the backend returns the launch URL
+    // with Telegram-compatible signed #tgWebAppData.
+    // ---------------------------------------------------------------
+    private void handleRequestWebApp(TLRPC.InputUser bot, String url, String kind, TLRPC.InputPeer peer, String startParam, TLRPC.TL_dataJSON themeParams, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String botMongoId = bot != null ? userMongoIdByTlId.get(bot.user_id) : null;
+                if (botMongoId == null) {
+                    complete(onComplete, null, tlError(400, "BOT_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("botId", botMongoId);
+                body.put("kind", kind);
+                if (url != null && !url.isEmpty()) body.put("url", url);
+                if (startParam != null && !startParam.isEmpty()) body.put("startParam", startParam);
+                if (themeParams != null && themeParams.data != null) body.put("themeParams", themeParams.data);
+                String convId = peer != null ? resolveConversationId(peer) : null;
+                if (convId != null) body.put("conversationId", convId);
+                JSONObject resp = request("POST", "/messages/webapp", body, true);
+                TLRPC.TL_webViewResultUrl result = new TLRPC.TL_webViewResultUrl();
+                result.url = resp.getString("url");
+                result.query_id = idForUrl("webapp:" + resp.optString("query_id", ""));
+                result.flags |= TLObject.FLAG_0; // query_id present
+                complete(onComplete, result, null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(400, "WEBAPP_" + (e.message == null ? "ERROR" : e.message.replace(' ', '_').toUpperCase(Locale.US))));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // messages.sendWebViewData -> Telegram.WebApp.sendData() from a keyboard web app
+    private void handleSendWebViewData(TLRPC.TL_messages_sendWebViewData req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String botMongoId = userMongoIdByTlId.get(req.bot.user_id);
+                if (botMongoId != null) {
+                    JSONObject body = new JSONObject();
+                    body.put("botId", botMongoId);
+                    body.put("buttonText", req.button_text == null ? "" : req.button_text);
+                    body.put("data", req.data == null ? "" : req.data);
+                    request("POST", "/messages/webapp-data", body, true);
+                }
+                complete(onComplete, new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Reports: messages.report (option picker flow), account.reportPeer,
+    // messages.reportSpam -> POST /auth/report
+    // ---------------------------------------------------------------
+    private static final String[][] REPORT_OPTIONS = {
+            {"spam", "Spam"},
+            {"violence", "Violence"},
+            {"pornography", "Pornography"},
+            {"child_abuse", "Child abuse"},
+            {"illegal", "Illegal goods"},
+            {"scam", "Scam or fraud"},
+            {"other", "Other"},
+    };
+
+    private void handleReportMessages(TLRPC.TL_messages_report req, RequestDelegate onComplete) {
+        String option = req.option == null ? "" : new String(req.option, StandardCharsets.UTF_8);
+        if (option.isEmpty()) {
+            TLRPC.TL_reportResultChooseOption choose = new TLRPC.TL_reportResultChooseOption();
+            choose.title = "Report";
+            for (String[] o : REPORT_OPTIONS) {
+                TLRPC.TL_messageReportOption item = new TLRPC.TL_messageReportOption();
+                item.text = o[1];
+                item.option = o[0].getBytes(StandardCharsets.UTF_8);
+                choose.options.add(item);
+            }
+            complete(onComplete, choose, null);
+            return;
+        }
+        if ("other".equals(option) && (req.message == null || req.message.isEmpty())) {
+            TLRPC.TL_reportResultAddComment comment = new TLRPC.TL_reportResultAddComment();
+            comment.option = req.option;
+            comment.optional = false;
+            complete(onComplete, comment, null);
+            return;
+        }
+        String messageMongoId = req.id != null && !req.id.isEmpty() ? messageMongoIdByTlId.get(req.id.get(0)) : null;
+        sendReport(req.peer, messageMongoId, option, req.message, onComplete, new TLRPC.TL_reportResultReported());
+    }
+
+    private void sendReport(TLRPC.InputPeer peer, String messageMongoId, String reason, String comment, RequestDelegate onComplete, TLObject okResponse) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("reason", reason == null || reason.isEmpty() ? "other" : reason);
+                body.put("source", "android");
+                String description = comment == null ? "" : comment;
+                if (peer != null && peer.user_id != 0) {
+                    String userMongoId = userMongoIdByTlId.get(peer.user_id);
+                    if (userMongoId != null) body.put("reportedUserId", userMongoId);
+                } else if (peer != null) {
+                    String convId = resolveConversationId(peer);
+                    if (convId != null) description = "[conversation " + convId + "] " + description;
+                }
+                if (messageMongoId != null) body.put("messageId", messageMongoId);
+                body.put("description", description);
+                request("POST", "/auth/report", body, true);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, okResponse, null);
+        });
+    }
+
+    // ---------------------------------------------------------------
     // Bot API style replyMarkup (inline_keyboard / keyboard /
     // remove_keyboard) -> TL reply markup
     // ---------------------------------------------------------------
@@ -2240,7 +2400,7 @@ public class RestBridge {
                         } else if (bj.has("callback_game")) {
                             button.type = new TL_keyboard.TL_inlineButtonTypeGame();
                         } else if (bj.optJSONObject("web_app") != null) {
-                            TL_keyboard.TL_inlineButtonTypeUrl t = new TL_keyboard.TL_inlineButtonTypeUrl();
+                            TL_keyboard.TL_inlineButtonTypeWebView t = new TL_keyboard.TL_inlineButtonTypeWebView();
                             t.url = bj.optJSONObject("web_app").optString("url");
                             button.type = t;
                         } else {
@@ -2272,7 +2432,14 @@ public class RestBridge {
                         Object item = rowJson.opt(b);
                         TL_keyboard.TL_keyboardButton button = new TL_keyboard.TL_keyboardButton();
                         button.text = item instanceof JSONObject ? ((JSONObject) item).optString("text", "") : String.valueOf(item);
-                        button.type = new TL_keyboard.TL_buttonTypeDefault();
+                        JSONObject webApp = item instanceof JSONObject ? ((JSONObject) item).optJSONObject("web_app") : null;
+                        if (webApp != null && !webApp.optString("url", "").isEmpty()) {
+                            TL_keyboard.TL_buttonTypeSimpleWebView t = new TL_keyboard.TL_buttonTypeSimpleWebView();
+                            t.url = webApp.optString("url");
+                            button.type = t;
+                        } else {
+                            button.type = new TL_keyboard.TL_buttonTypeDefault();
+                        }
                         row.buttons.add(button);
                     }
                     result.rows.add(row);
@@ -3076,7 +3243,15 @@ public class RestBridge {
                         info.commands.add(command);
                     }
                     info.flags |= 4;
-                    if (!info.commands.isEmpty()) {
+                    JSONObject menuButton = userJson.optJSONObject("menuButton");
+                    JSONObject menuWebApp = menuButton != null ? menuButton.optJSONObject("web_app") : null;
+                    if (menuWebApp != null && !menuWebApp.optString("url", "").isEmpty()) {
+                        TL_bots.TL_botMenuButton button = new TL_bots.TL_botMenuButton();
+                        button.text = menuButton.optString("text", "Open");
+                        button.url = menuWebApp.optString("url");
+                        info.menu_button = button;
+                        info.flags |= 8;
+                    } else if (!info.commands.isEmpty()) {
                         info.menu_button = new TL_bots.TL_botMenuButtonCommands();
                         info.flags |= 8;
                     }
@@ -5267,6 +5442,28 @@ public class RestBridge {
             user.username = username;
             user.flags |= TLObject.FLAG_3; // username present
         }
+        // Extra usernames: Telegram shows them as "also @a, @b" on the profile.
+        JSONArray extraUsernames = u.optJSONArray("additionalUsernames");
+        if (extraUsernames != null && extraUsernames.length() > 0) {
+            if (user.username != null) {
+                TLRPC.TL_username main = new TLRPC.TL_username();
+                main.username = user.username;
+                main.active = true;
+                main.editable = self;
+                user.usernames.add(main);
+            }
+            for (int i = 0; i < extraUsernames.length(); i++) {
+                String extra = extraUsernames.optString(i, "");
+                if (extra.isEmpty() || extra.equalsIgnoreCase(user.username)) continue;
+                TLRPC.TL_username entry = new TLRPC.TL_username();
+                entry.username = extra;
+                entry.active = true;
+                user.usernames.add(entry);
+            }
+            if (!user.usernames.isEmpty()) {
+                user.flags2 |= TLObject.FLAG_0; // usernames present
+            }
+        }
 
         String phone = u.optString("phone", null);
         if (phone != null && phone.length() > 0 && !u.optBoolean("isPhoneHidden", false)) {
@@ -5283,6 +5480,8 @@ public class RestBridge {
         user.bot = u.optBoolean("isBot", false);
         if (user.bot) {
             user.bot_info_version = 1;
+            JSONObject menuButton = u.optJSONObject("menuButton");
+            user.bot_has_main_app = menuButton != null && "web_app".equals(menuButton.optString("type"));
         }
 
         String avatar = u.optString("avatar", null);
