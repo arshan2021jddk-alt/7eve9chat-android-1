@@ -12558,9 +12558,28 @@ public class MessagesController extends BaseController implements NotificationCe
                     if (onEmptyCallback != null && dialogsRes.dialogs.isEmpty()) {
                         AndroidUtilities.runOnUIThread(onEmptyCallback);
                     }
+                } else {
+                    // 7eve9Chat: REST requests can fail (network change, server
+                    // restart). MTProto never reports those, so upstream never
+                    // cleared the flag here and the list could not load again.
+                    AndroidUtilities.runOnUIThread(() -> {
+                        loadingDialogs.put(folderId, false);
+                        getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
+                    });
                 }
             });
         }
+    }
+
+    // 7eve9Chat: the backend has no dialog paging / getDifference. The list is
+    // kept in sync by merging a full snapshot from the server into it (new
+    // chats appear, top messages update) without touching the paging state;
+    // see SocketBridge.refreshDialogs().
+    public void mergeServerDialogs(TLRPC.messages_Dialogs dialogsRes, int folderId) {
+        if (dialogsRes == null || dialogsRes.dialogs.isEmpty()) {
+            return;
+        }
+        processLoadedDialogs(dialogsRes, null, null, folderId, 0, dialogsRes.dialogs.size(), DIALOGS_LOAD_TYPE_UNKNOWN, false, false, false);
     }
 
     public void loadGlobalNotificationsSettings() {

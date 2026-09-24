@@ -355,14 +355,43 @@ public class SocketBridge {
         }
     }
 
+    // Full resync of the chat list from the server. (MessagesController.loadDialogs
+    // only pages *older* dialogs, and after the first load it considers the
+    // list complete, so new chats never showed up and a restart with an empty
+    // cache left the list empty until the next login.)
     private void refreshDialogs() {
-        Utilities.stageQueue.postRunnable(() -> {
-            try {
-                AccountInstance.getInstance(currentAccount).getMessagesController().loadDialogs(0, 0, 100, false);
-            } catch (Exception e) {
-                FileLog.e(e);
+        syncDialogs(0);
+    }
+
+    private void syncDialogs(int folderId) {
+        try {
+            TLRPC.TL_messages_getDialogs req = new TLRPC.TL_messages_getDialogs();
+            req.limit = 100;
+            req.offset_peer = new TLRPC.TL_inputPeerEmpty();
+            if (folderId != 0) {
+                req.flags |= 2;
+                req.folder_id = folderId;
             }
-        });
+            ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
+                if (!(response instanceof TLRPC.messages_Dialogs)) {
+                    return;
+                }
+                TLRPC.messages_Dialogs res = (TLRPC.messages_Dialogs) response;
+                boolean hasArchive = false;
+                for (TLRPC.Dialog d : res.dialogs) {
+                    if (d instanceof TLRPC.TL_dialogFolder) {
+                        hasArchive = true;
+                        break;
+                    }
+                }
+                AccountInstance.getInstance(currentAccount).getMessagesController().mergeServerDialogs(res, folderId);
+                if (folderId == 0 && hasArchive) {
+                    syncDialogs(1);
+                }
+            });
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     // Applies the updates directly instead of via processUpdates(): that

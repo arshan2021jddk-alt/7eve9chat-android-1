@@ -7518,7 +7518,9 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     emptyView.button.setVisibility(View.GONE);
                 } else {
                     emptyView.setStickerType(StickerEmptyView.STICKER_TYPE_ALBUM);
-                    emptyView.button.setVisibility(!isSearchingStories() ? View.VISIBLE : View.GONE);
+                    // Only where this account may post (a channel / group it runs, or its own bot);
+                    // never on someone else's profile.
+                    emptyView.button.setVisibility(!isSearchingStories() && canAddStoryHere() ? View.VISIBLE : View.GONE);
                     emptyView.button.setText(addPostText(), false);
                 }
 
@@ -7534,8 +7536,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     if (isAlbum) {
                         openAddStoriesToAlbumSheet(profileActivity, dialog_id, albumId);
                     } else {
-                        profileActivity.getMessagesController().getMainSettings().edit().putBoolean("story_keep", true).apply();
-                        StoryRecorder.getInstance(profileActivity.getParentActivity(), profileActivity.getCurrentAccount()).open(null);
+                        openStoryRecorderHere();
                     }
                 });
             } else if (mediaPages[a].selectedType == TAB_ARCHIVED_STORIES) {
@@ -7545,15 +7546,12 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                 } else {
                     mediaPages[a].emptyView.stickerView.setVisibility(View.VISIBLE);
                     mediaPages[a].emptyView.setStickerType(StickerEmptyView.STICKER_TYPE_ALBUM);
-                    mediaPages[a].emptyView.button.setVisibility(View.VISIBLE);
+                    mediaPages[a].emptyView.button.setVisibility(canAddStoryHere() ? View.VISIBLE : View.GONE);
                     mediaPages[a].emptyView.button.setText(addPostText(), false);
                 }
                 mediaPages[a].emptyView.title.setText(getString(R.string.NoArchivedStoriesTitle));
                 mediaPages[a].emptyView.subtitle.setText(isStoriesView() ? getString(R.string.NoArchivedStoriesSubtitle) : "");
-                mediaPages[a].emptyView.button.setOnClickListener(v -> {
-                    profileActivity.getMessagesController().getMainSettings().edit().putBoolean("story_keep", true).apply();
-                    StoryRecorder.getInstance(profileActivity.getParentActivity(), profileActivity.getCurrentAccount()).open(null);
-                });
+                mediaPages[a].emptyView.button.setOnClickListener(v -> openStoryRecorderHere());
             } else {
                 mediaPages[a].emptyView.stickerView.setVisibility(View.VISIBLE);
                 mediaPages[a].emptyView.setStickerType(StickerEmptyView.STICKER_TYPE_SEARCH);
@@ -11825,6 +11823,22 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     private SpannableStringBuilder addPostButton;
+    // 7eve9Chat: "Add story" on a profile posts *as that profile* (a channel or
+    // group this account runs) - it used to open the recorder as yourself.
+    private boolean canAddStoryHere() {
+        if (isBot()) return true;
+        return dialog_id < 0 && profileActivity.getMessagesController().getStoriesController().canPostStories(dialog_id);
+    }
+
+    private void openStoryRecorderHere() {
+        profileActivity.getMessagesController().getMainSettings().edit().putBoolean("story_keep", true).apply();
+        StoryRecorder recorder = StoryRecorder.getInstance(profileActivity.getParentActivity(), profileActivity.getCurrentAccount());
+        if (dialog_id < 0) {
+            recorder.selectedPeerId(dialog_id);
+        }
+        recorder.open(null);
+    }
+
     private CharSequence addPostText() {
         if (addPostButton == null) {
             addPostButton = new SpannableStringBuilder();

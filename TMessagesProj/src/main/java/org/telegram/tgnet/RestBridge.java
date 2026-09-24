@@ -146,6 +146,8 @@ public class RestBridge {
     // handleGetAllStickers() so handleGetStickerSet() can resolve which set
     // the UI is actually asking to open.
     private final java.util.concurrent.ConcurrentHashMap<Long, String> stickerSetMongoIdById = new java.util.concurrent.ConcurrentHashMap<>();
+    // TL sticker set id -> {title, "1" if I created it}
+    private final java.util.concurrent.ConcurrentHashMap<Long, String[]> stickerSetMetaById = new java.util.concurrent.ConcurrentHashMap<>();
 
     private RestBridge(int account) {
         currentAccount = account;
@@ -1508,6 +1510,18 @@ public class RestBridge {
                 handleGetMessagesViews((TLRPC.TL_messages_getMessagesViews) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_account_saveMusic) {
+                handleSaveMusic((TLRPC.TL_account_saveMusic) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.getSavedMusicIds) {
+                handleGetSavedMusicIds(onComplete);
+                return true;
+            }
+            if (request instanceof TL_account.getSavedMusicByID) {
+                handleGetSavedMusicByID((TL_account.getSavedMusicByID) request, onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_getSavedMusic) {
                 handleGetSavedMusic((TLRPC.TL_getSavedMusic) request, onComplete);
                 return true;
@@ -1649,6 +1663,29 @@ public class RestBridge {
             }
             if (request instanceof TL_stories.TL_stories_sendStory) {
                 handleSendStory((TL_stories.TL_stories_sendStory) request, onComplete);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_canSendStory) {
+                // Self: always. Groups / channels: owner or admins (the server checks again).
+                TLRPC.InputPeer peer = ((TL_stories.TL_stories_canSendStory) request).peer;
+                if (peer != null && peer.channel_id != 0 && !canPostStoriesAs(peer.channel_id)) {
+                    complete(onComplete, null, tlError(403, "CHAT_ADMIN_REQUIRED"));
+                    return true;
+                }
+                TL_stories.canSendStoryCount ok = new TL_stories.canSendStoryCount();
+                ok.count_remains = 100;
+                complete(onComplete, ok, null);
+                return true;
+            }
+            if (request instanceof TL_stories.TL_stories_getChatsToSend) {
+                // "Post story as": the groups and channels this account can post stories for
+                TLRPC.TL_messages_chats chats = new TLRPC.TL_messages_chats();
+                for (Long channelId : conversationIdByChatPeer.keySet()) {
+                    if (canPostStoriesAs(channelId)) {
+                        chats.chats.add(org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(channelId));
+                    }
+                }
+                complete(onComplete, chats, null);
                 return true;
             }
         } catch (Exception e) {
@@ -3248,6 +3285,69 @@ public class RestBridge {
         return request("GET", "/auth/users/" + mongoId, null, true);
     }
 
+    // account.saveMusic -> POST /auth/profile-music ("Save to profile" on a song)
+    private void handleSaveMusic(TLRPC.TL_account_saveMusic req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String url = req.id != null ? relativeUploadPath(mediaUrlById.get(req.id.id)) : null;
+                if (url == null) {
+                    complete(onComplete, null, tlError(400, "MEDIA_INVALID"));
+                    return;
+                }
+                JSONObject body = new JSONObject();
+                body.put("url", url);
+                if (req.unsave) body.put("unsave", true);
+                String after = req.after_id != null ? relativeUploadPath(mediaUrlById.get(req.after_id.id)) : null;
+                if (after != null) body.put("afterUrl", after);
+                request("POST", "/auth/profile-music", body, true);
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // account.getSavedMusicIds -> the ids of the songs on my profile (the player's "saved" state)
+    private void handleGetSavedMusicIds(RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TL_account.TL_savedMusicIds result = new TL_account.TL_savedMusicIds();
+            try {
+                JSONArray songs = request("GET", "/auth/me", null, true).optJSONArray("profileSongs");
+                for (int i = 0; songs != null && i < songs.length(); i++) {
+                    TLRPC.Document doc = buildSongDocument(songs.getJSONObject(i));
+                    if (doc != null) result.ids.add(doc.id);
+                }
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
+    private void handleGetSavedMusicByID(TL_account.getSavedMusicByID req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            TLRPC.TL_savedMusic result = new TLRPC.TL_savedMusic();
+            try {
+                java.util.HashSet<Long> wanted = new java.util.HashSet<>();
+                for (TLRPC.InputDocument d : req.documents) wanted.add(d.id);
+                JSONArray songs = fetchUserJson(req.id).optJSONArray("profileSongs");
+                for (int i = 0; songs != null && i < songs.length(); i++) {
+                    TLRPC.Document doc = buildSongDocument(songs.getJSONObject(i));
+                    if (doc != null && (wanted.isEmpty() || wanted.contains(doc.id))) result.documents.add(doc);
+                }
+                result.count = result.documents.size();
+                savePeerMap("mediaMap", mediaUrlById);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            complete(onComplete, result, null);
+        });
+    }
+
     private void handleGetSavedMusic(TLRPC.TL_getSavedMusic req, RequestDelegate onComplete) {
         executor.execute(() -> {
             TLRPC.TL_savedMusic result = new TLRPC.TL_savedMusic();
@@ -3754,6 +3854,7 @@ public class RestBridge {
                     : guessMime(inputFile != null ? inputFile.name : null, "application/octet-stream");
             boolean voice = false;
             boolean isVideo = false;
+            boolean animated = false;
             for (TLRPC.DocumentAttribute attr : media.attributes) {
                 if (attr instanceof TLRPC.TL_documentAttributeFilename) {
                     fileName = attr.file_name;
@@ -3761,12 +3862,18 @@ public class RestBridge {
                     voice = true;
                 } else if (attr instanceof TLRPC.TL_documentAttributeVideo) {
                     isVideo = true;
+                } else if (attr instanceof TLRPC.TL_documentAttributeAnimated) {
+                    animated = true;
                 }
             }
             if (voice) {
                 type = "voice";
             } else if (media.force_file) {
                 type = "file";
+            } else if (animated && (isVideo || mime.startsWith("video/") || "image/gif".equals(mime))) {
+                // Telegram marks a video muted in the editor (and real GIFs) as
+                // "animated": it becomes a GIF that loops and can be saved to GIFs.
+                type = "gif";
             } else if (isVideo || mime.startsWith("video/")) {
                 type = "video";
             } else if (mime.startsWith("audio/")) {
@@ -3897,6 +4004,11 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // stories.sendStory -> POST /stories (multipart "file" + caption)
     // ---------------------------------------------------------------
+    private boolean canPostStoriesAs(long channelId) {
+        TLRPC.Chat chat = org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(channelId);
+        return chat != null && !chat.left && (chat.creator || chat.admin_rights != null && chat.admin_rights.post_stories);
+    }
+
     private void handleSendStory(TL_stories.TL_stories_sendStory req, RequestDelegate onComplete) {
         executor.execute(() -> {
             java.io.File file = null;
@@ -4925,6 +5037,9 @@ public class RestBridge {
                     set.short_name = s.optString("shortName", mongoId);
                     set.count = 0;
                     set.hash = 0;
+                    // My own packs: Telegram shows "+ Add sticker" / edit / rename for them
+                    set.creator = selfMongoId != null && selfMongoId.equals(refId(s, "creator"));
+                    stickerSetMetaById.put(tlId, new String[]{set.title, set.creator ? "1" : "0"});
                     result.sets.add(set);
                 }
                 complete(onComplete, result, null);
@@ -4951,7 +5066,9 @@ public class RestBridge {
                 TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
                 set.id = req.stickerset.id;
                 set.access_hash = 1;
-                set.title = "Stickers";
+                String[] meta = stickerSetMetaById.get(req.stickerset.id);
+                set.title = meta != null ? meta[0] : "Stickers";
+                set.creator = meta != null && "1".equals(meta[1]);
                 set.short_name = req.stickerset.short_name != null ? req.stickerset.short_name : mongoSetId;
                 set.count = stickers.length();
                 set.hash = 0;
@@ -5587,6 +5704,8 @@ public class RestBridge {
         set.access_hash = 1;
         set.title = title;
         set.short_name = shortName;
+        set.creator = true; // created / edited by me
+        stickerSetMetaById.put(tlId, new String[]{title, "1"});
         TLRPC.TL_messages_stickerSet result = new TLRPC.TL_messages_stickerSet();
         result.set = set;
         JSONArray stickers = requestArray("GET", "/stickers?setId=" + setMongoId, null, true);
@@ -9943,14 +10062,58 @@ public class RestBridge {
     private static final java.util.regex.Pattern ENTITY_URL = java.util.regex.Pattern.compile(
             "(?i)\\b(?:https?://|www\\.)[^\\s<>\"]+|\\b(?:[a-z0-9-]+\\.)+(?:ir|com|net|org|me|io|app|co|dev|info|xyz|tv)\\b(?:/[^\\s<>\"]*)?");
     private static final java.util.regex.Pattern ENTITY_EMAIL = java.util.regex.Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}");
-    private static final java.util.regex.Pattern ENTITY_MENTION = java.util.regex.Pattern.compile("(?<![\\w@])@[A-Za-z][A-Za-z0-9_]{2,31}");
+    // Our usernames may start with a digit (7eve9ai, 7eve9bot...), like the ones Telegram's own detection accepts.
+    private static final java.util.regex.Pattern ENTITY_MENTION = java.util.regex.Pattern.compile("(?<![\\w@])@[A-Za-z0-9_]{3,32}");
     private static final java.util.regex.Pattern ENTITY_HASHTAG = java.util.regex.Pattern.compile("(?<![\\w#])#[\\p{L}\\p{N}_]+");
     private static final java.util.regex.Pattern ENTITY_COMMAND = java.util.regex.Pattern.compile("(?<![\\w/])/[A-Za-z0-9_]{1,32}(?:@[A-Za-z0-9_]{3,32})?");
 
+    // Links / @usernames / #tags / /commands, found with exactly the detection
+    // Telegram uses to color a message while it is being sent
+    // (MessageObject.addLinks). Whatever was blue before sending stays a
+    // clickable link afterwards. Emails are added on top.
     static ArrayList<TLRPC.MessageEntity> parseEntities(String text) {
         ArrayList<TLRPC.MessageEntity> out = new ArrayList<>();
         if (text == null || text.isEmpty()) {
             return out;
+        }
+        try {
+            android.text.SpannableStringBuilder sp = new android.text.SpannableStringBuilder(text);
+            org.telegram.messenger.MessageObject.addLinks(false, sp, true, false);
+            android.text.style.URLSpan[] spans = sp.getSpans(0, sp.length(), android.text.style.URLSpan.class);
+            boolean[] taken = new boolean[text.length()];
+            for (android.text.style.URLSpan span : spans) {
+                int start = sp.getSpanStart(span);
+                int end = sp.getSpanEnd(span);
+                String url = span.getURL();
+                if (start < 0 || end <= start || end > text.length() || url == null) continue;
+                char first = text.charAt(start);
+                TLRPC.MessageEntity e;
+                if (span instanceof org.telegram.ui.Components.URLSpanBotCommand || first == '/') {
+                    e = new TLRPC.TL_messageEntityBotCommand();
+                } else if (first == '@') {
+                    e = new TLRPC.TL_messageEntityMention();
+                } else if (first == '#') {
+                    e = new TLRPC.TL_messageEntityHashtag();
+                } else if (first == '$') {
+                    e = new TLRPC.TL_messageEntityCashtag();
+                } else if (url.startsWith("tel:")) {
+                    continue; // phone numbers are linked at display time
+                } else if (url.startsWith("mailto:")) {
+                    e = new TLRPC.TL_messageEntityEmail();
+                } else {
+                    e = new TLRPC.TL_messageEntityUrl();
+                }
+                e.offset = start;
+                e.length = end - start;
+                out.add(e);
+                for (int i = start; i < end; i++) taken[i] = true;
+            }
+            addEntities(out, taken, ENTITY_EMAIL.matcher(text), 0);
+            java.util.Collections.sort(out, (a, b) -> Integer.compare(a.offset, b.offset));
+            return out;
+        } catch (Throwable t) {
+            FileLog.e(t);
+            out.clear();
         }
         boolean[] taken = new boolean[text.length()];
         addEntities(out, taken, ENTITY_EMAIL.matcher(text), 0);
