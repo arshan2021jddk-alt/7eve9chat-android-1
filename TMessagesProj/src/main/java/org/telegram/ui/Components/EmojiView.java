@@ -352,6 +352,8 @@ public class EmojiView extends FrameLayout implements
 
     private ArrayList<TLRPC.Document> recentGifs = new ArrayList<>();
     private ArrayList<TLRPC.Document> recentStickers = new ArrayList<>();
+    // 7eve9chat: just the "Create" cell, shown while there are no stickers at all yet
+    private final ArrayList<TLRPC.Document> createStickerOnly = new ArrayList<>(java.util.Collections.singletonList(new TLRPC.TL_documentEmpty()));
     private ArrayList<TLRPC.Document> favouriteStickers = new ArrayList<>();
     private ArrayList<TLRPC.Document> premiumStickers = new ArrayList<>();
     private ArrayList<TLRPC.StickerSetCovered> featuredStickerSets = new ArrayList<>();
@@ -812,7 +814,24 @@ public class EmojiView extends FrameLayout implements
             box.setBackground(Theme.createRoundRectDrawable(dp(18), glassDesign ? getGlassIconColor(0.06f) : getThemedColor(Theme.key_chat_emojiSearchBackground)));
             box.setClipToOutline(true);
             box.setOutlineProvider(ViewOutlineProviderImpl.boundsWithPaddingRoundRect(0, dp(18)));
-            if (type == 2) {
+            if (type == 2 && fragment instanceof ChatActivity) {
+                // 7eve9chat: "Create GIF" next to the GIF search - a muted video sent from here
+                // becomes a GIF and is kept in the GIF tab
+                addView(box, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.FILL, 10, 8, 54, 8));
+                ImageView createGif = new ImageView(context);
+                createGif.setScaleType(ImageView.ScaleType.CENTER);
+                createGif.setImageResource(R.drawable.msg_gif_add);
+                createGif.setColorFilter(new PorterDuffColorFilter(glassDesign ? getGlassIconColor(0.4f) : getThemedColor(Theme.key_chat_emojiSearchIcon), PorterDuff.Mode.SRC_IN));
+                createGif.setBackground(Theme.createRoundRectDrawable(dp(18), glassDesign ? getGlassIconColor(0.06f) : getThemedColor(Theme.key_chat_emojiSearchBackground)));
+                createGif.setContentDescription(getString(R.string.S7CreateGif));
+                ScaleStateListAnimator.apply(createGif, .1f, 1.5f);
+                createGif.setOnClickListener(v -> {
+                    if (fragment instanceof ChatActivity) {
+                        ((ChatActivity) fragment).openAttachMenuForCreatingGif();
+                    }
+                });
+                addView(createGif, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 8, 10, 0));
+            } else if (type == 2) {
                 addView(box, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.FILL, 10, 8, 10, 8));
             } else {
                 addView(box, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.FILL, 10, 6, 10, 8));
@@ -6966,6 +6985,8 @@ public class EmojiView extends FrameLayout implements
                             }
                         } else if (object == recentStickers) {
                             cell.setText(getString(R.string.RecentStickers), R.drawable.msg_close, getString(R.string.ClearRecentStickersAlertTitle));
+                        } else if (object == createStickerOnly) {
+                            cell.setText(getString(R.string.StickersCreateNewSticker), 0);
                         } else if (object == favouriteStickers) {
                             cell.setText(getString(R.string.FavoriteStickers), 0);
                         } else if (object == premiumStickers) {
@@ -7031,6 +7052,9 @@ public class EmojiView extends FrameLayout implements
                 } else if (a == -2) {
                     documents = recentStickers;
                     if (!documents.isEmpty() && !disableStickerEditor) {
+                        isAddedStickerBtnSet = true;
+                    } else if (packs.isEmpty() && !disableStickerEditor) {
+                        documents = createStickerOnly;
                         isAddedStickerBtnSet = true;
                     }
                     packStartPosition.put(key = "recent", totalItems);

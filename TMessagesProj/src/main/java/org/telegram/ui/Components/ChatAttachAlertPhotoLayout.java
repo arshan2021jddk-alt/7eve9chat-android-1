@@ -8,6 +8,8 @@
 
 package org.telegram.ui.Components;
 
+import org.telegram.ui.Components.Paint.Views.VideoStickerMaker;
+
 import static android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
 
 import static org.telegram.messenger.AndroidUtilities.dp;
@@ -964,6 +966,17 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                 if (position < 0 || position >= arrayList.size()) {
                     return;
                 }
+                if (parentAlert.isStickerMode && arrayList.get(position) instanceof MediaController.PhotoEntry
+                        && VideoStickerMaker.isAnimatedSource((MediaController.PhotoEntry) arrayList.get(position))) {
+                    // 7eve9chat: a video or GIF becomes an animated (WebM) sticker
+                    MediaController.PhotoEntry entry = (MediaController.PhotoEntry) arrayList.get(position);
+                    long dialogId = parentAlert.baseFragment instanceof ChatActivity ? ((ChatActivity) parentAlert.baseFragment).getDialogId() : 0;
+                    Activity activity = AndroidUtilities.findActivity(getContext());
+                    Utilities.Callback2<String, TLRPC.InputDocument> handler = parentAlert.customStickerHandler;
+                    parentAlert.dismiss(true);
+                    VideoStickerMaker.create(activity, dialogId, entry.path, handler);
+                    return;
+                }
                 if (parentAlert.delegate != null && parentAlert.delegate.selectItemOnClicking() && arrayList.get(position) instanceof MediaController.PhotoEntry) {
                     MediaController.PhotoEntry photoEntry = (MediaController.PhotoEntry) arrayList.get(position);
                     selectedPhotos.clear();
@@ -1049,6 +1062,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                     if (parentAlert.isPollAttach) {
                         avatarType = PhotoViewer.SELECT_TYPE_POLL_MEDIA;
                     }
+                    PhotoViewer.getInstance().setOpenVideosMuted(parentAlert.isGifCreationMode);
                     PhotoViewer.getInstance().openPhotoForSelect(arrayList, finalPosition, avatarType, false, photoViewerProvider, parentAlert.isPollAttach ? null : chatActivity);
                     PhotoViewer.getInstance().setAvatarFor(parentAlert.getAvatarFor());
                     if (parentAlert.isPhotoPicker && !parentAlert.isStickerMode) {
@@ -2566,6 +2580,16 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         this.includeVideosInGallery = includeVideosInGallery;
     }
 
+    // 7eve9chat: "Create GIF" picks from the videos album
+    private void selectGifCreationAlbum() {
+        if (parentAlert != null && parentAlert.isGifCreationMode && MediaController.allVideosAlbumEntry != null) {
+            selectedAlbumEntry = MediaController.allVideosAlbumEntry;
+            if (dropDown != null) {
+                dropDown.setText(selectedAlbumEntry.bucketName);
+            }
+        }
+    }
+
     private boolean shouldLoadAllMedia() {
         return includeVideosInGallery || !parentAlert.isPhotoPicker && (parentAlert.baseFragment instanceof ChatActivity || parentAlert.storyMediaPicker || parentAlert.avatarPicker == 2);
     }
@@ -3743,6 +3767,7 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
         dropDown.setText(LocaleController.getString(R.string.ChatGallery));
 
         selectedAlbumEntry = galleryAlbumEntry;
+        selectGifCreationAlbum();
         if (selectedAlbumEntry != null) {
             loading = false;
             if (progressView != null) {
@@ -4232,7 +4257,9 @@ public class ChatAttachAlertPhotoLayout extends ChatAttachAlert.AttachAlertLayou
                 } else {
                     galleryAlbumEntry = MediaController.allPhotosAlbumEntry;
                 }
-                if (selectedAlbumEntry == null || parentAlert != null && parentAlert.isStickerMode) {
+                if (parentAlert != null && parentAlert.isGifCreationMode && MediaController.allVideosAlbumEntry != null) {
+                    selectGifCreationAlbum();
+                } else if (selectedAlbumEntry == null || parentAlert != null && parentAlert.isStickerMode) {
                     selectedAlbumEntry = galleryAlbumEntry;
                 } else if (shouldLoadAllMedia()) {
                     for (int a = 0; a < MediaController.allMediaAlbums.size(); a++) {

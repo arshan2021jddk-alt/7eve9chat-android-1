@@ -239,6 +239,15 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
     public boolean forUser;
     public boolean isPhotoPicker;
     public boolean isStickerMode;
+    // 7eve9chat: "Create GIF" from the GIF panel - videos only, sent muted (= as a GIF)
+    public boolean isGifCreationMode;
+
+    public void setGifCreationMode(boolean gifMode) {
+        isGifCreationMode = gifMode;
+        if (gifMode) {
+            selectedTextView.setText(getString(R.string.S7ChooseVideoForGif));
+        }
+    }
     public boolean isPollAttach;
     private int pollAllowedLayouts;
     public Utilities.Callback2<String, TLRPC.InputDocument> customStickerHandler;
@@ -6257,12 +6266,17 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
     }
 
     public void enableStickerMode(Utilities.Callback2<String, TLRPC.InputDocument> customStickerHandler) {
-        selectedTextView.setText(getString(R.string.ChoosePhotoForSticker));
+        // 7eve9chat: videos and GIFs too - they become animated stickers (VideoStickerMaker)
+        selectedTextView.setText(getString(R.string.S7ChooseMediaForSticker));
+        if (photoLayout != null) {
+            photoLayout.setIncludeVideosInGallery(true);
+        }
         typeButtonsAvailable = false;
         buttonsRecyclerViewWrapper.setVisibility(View.GONE);
         avatarPicker = 1;
         isPhotoPicker = true;
         isStickerMode = true;
+        isGifCreationMode = false;
         allowLivePhotos = false;
         this.customStickerHandler = customStickerHandler;
         if (optionsItem != null) {
@@ -6285,6 +6299,7 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
         avatarPicker = 0;
         isPhotoPicker = false;
         isStickerMode = false;
+        isGifCreationMode = false;
         customStickerHandler = null;
         if (optionsItem != null) {
             selectedTextView.setTranslationY(0);
@@ -6302,6 +6317,7 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
         avatarPicker = 0;
         isPhotoPicker = false;
         isStickerMode = false;
+        isGifCreationMode = false;
         allowLivePhotos = true;
         customStickerHandler = null;
         if (optionsItem != null) {

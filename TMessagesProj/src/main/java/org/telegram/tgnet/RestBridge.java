@@ -9431,6 +9431,14 @@ public class RestBridge {
     }
 
     private TLRPC.TL_messageMediaDocument buildDocumentMedia(String url, String mimeType, String fileName, String kind) {
+        if ("sticker".equals(kind)) {
+            // Animated stickers / emoji made from a video or GIF are VP9 WebM files
+            String path = url == null ? "" : url.toLowerCase(Locale.US);
+            int q = path.indexOf('?');
+            if (q >= 0) path = path.substring(0, q);
+            if (path.endsWith(".webm")) mimeType = "video/webm";
+            else if (path.endsWith(".tgs")) mimeType = "application/x-tgsticker";
+        }
         TLRPC.TL_document document = new TLRPC.TL_document();
         document.id = idForUrl(url);
         document.access_hash = 0;
@@ -9460,6 +9468,12 @@ public class RestBridge {
             sizeAttr.w = 512;
             sizeAttr.h = 512;
             document.attributes.add(sizeAttr);
+            if ("video/webm".equals(mimeType)) {
+                TLRPC.TL_documentAttributeVideo videoAttr = new TLRPC.TL_documentAttributeVideo();
+                videoAttr.w = 512;
+                videoAttr.h = 512;
+                document.attributes.add(videoAttr);
+            }
         }
         if ("video".equals(kind) || "gif".equals(kind)) {
             TLRPC.TL_documentAttributeVideo videoAttr = new TLRPC.TL_documentAttributeVideo();

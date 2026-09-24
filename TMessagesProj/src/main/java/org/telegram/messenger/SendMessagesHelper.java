@@ -11761,7 +11761,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         return bitmap;
     }
 
-    private static VideoEditedInfo createCompressionSettings(String videoPath, long videoOffset) {
+    public static VideoEditedInfo createCompressionSettings(String videoPath, long videoOffset) {
         int[] params = new int[AnimatedFileInfo.PARAM_NUM_COUNT];
         AnimatedFileNative.getVideoInfo(videoPath, params, videoOffset);
 

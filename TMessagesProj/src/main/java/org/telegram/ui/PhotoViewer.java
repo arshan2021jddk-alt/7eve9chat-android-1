@@ -366,6 +366,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private boolean allowOrder = true;
 
     private boolean muteVideo;
+    // 7eve9chat: "Create GIF" opens videos muted (a muted video is sent as a GIF)
+    private boolean openVideosMuted;
+
+    public void setOpenVideosMuted(boolean muted) {
+        openVideosMuted = muted;
+    }
 
     private boolean isUnalivePhoto() {
         if (sendPhotoType == SELECT_TYPE_STICKER) return true;
@@ -18641,6 +18647,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void onPhotoClosed(PlaceProviderObject object) {
+        openVideosMuted = false;
         if (doneButtonPressed) {
             releasePlayer(true);
         }
@@ -21601,7 +21608,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         }
         videoTimelineView.setVideoPath(videoPath, videoPathOffset, start, end, livePhotoTimestampUs);
         videoPreviewMessageObject = null;
-        muteVideo = muted || sendPhotoType == SELECT_TYPE_AVATAR;
+        muteVideo = muted || sendPhotoType == SELECT_TYPE_AVATAR || openVideosMuted;
 
         compressionsCount = -1;
         rotationValue = 0;

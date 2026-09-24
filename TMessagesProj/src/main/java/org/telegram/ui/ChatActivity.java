@@ -12583,6 +12583,7 @@ public class ChatActivity extends BaseFragment implements
                         return;
                     }
                     final boolean isStickerMode = chatAttachAlert.isStickerMode;
+                    final boolean isGifCreationMode = chatAttachAlert.isGifCreationMode;
                     editingMessageObject = chatAttachAlert.getEditingMessageObject();
                     if (editingMessageObject != null && editingMessageObject.messageOwner != null) {
                         editingMessageObject.messageOwner.invert_media = invertMedia;
@@ -12632,6 +12633,13 @@ public class ChatActivity extends BaseFragment implements
                                     info.masks = photoEntry.stickers;
                                     info.ttl = photoEntry.ttl;
                                     info.videoEditedInfo = photoEntry.editedInfo;
+                                    if (isGifCreationMode && isVideo && info.videoEditedInfo == null && info.path != null) {
+                                        // sent straight from the grid: still muted, so it goes as a GIF
+                                        info.videoEditedInfo = SendMessagesHelper.createCompressionSettings(info.path, 0);
+                                        if (info.videoEditedInfo != null) {
+                                            info.videoEditedInfo.muted = true;
+                                        }
+                                    }
                                     info.canDeleteAfter = photoEntry.canDeleteAfter;
                                     info.updateStickersOrder = SendMessagesHelper.checkUpdateStickersOrder(photoEntry.caption);
                                     info.hasMediaSpoilers = photoEntry.hasSpoiler;
@@ -13579,6 +13587,29 @@ public class ChatActivity extends BaseFragment implements
         chatAttachAlert.setMaxSelectedPhotos(1, false);
         chatAttachAlert.setOpenWithFrontFaceCamera(true);
         chatAttachAlert.enableStickerMode(null);
+        chatAttachAlert.init();
+        chatAttachAlert.parentThemeDelegate = themeDelegate;
+        if (visibleDialog != null) {
+            chatAttachAlert.show();
+        } else {
+            showDialog(chatAttachAlert);
+        }
+    }
+
+    // 7eve9chat: "Create GIF" in the GIF panel - pick a video, edit it (trim, crop, draw, text);
+    // it is sent muted, i.e. as a GIF, and kept in the GIF tab
+    public void openAttachMenuForCreatingGif() {
+        if (getParentActivity() == null) {
+            return;
+        }
+        createChatAttachView();
+        chatAttachAlert.getPhotoLayout().loadGalleryPhotos();
+        if (Build.VERSION.SDK_INT == 21 || Build.VERSION.SDK_INT == 22) {
+            chatActivityEnterView.closeKeyboard();
+        }
+        chatAttachAlert.setMaxSelectedPhotos(1, false);
+        chatAttachAlert.enableDefaultMode();
+        chatAttachAlert.setGifCreationMode(true);
         chatAttachAlert.init();
         chatAttachAlert.parentThemeDelegate = themeDelegate;
         if (visibleDialog != null) {

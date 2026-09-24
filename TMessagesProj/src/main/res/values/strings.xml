@@ -11223,4 +11223,8 @@
     <string name="UnsupportedMessageTitle">Unsupported Message</string>
     <string name="UnsupportedMessageMessage">Update 7eve9Chat to view this message</string>
     <string name="UnsupportedUpdate">Update</string>
+    <string name="S7CreateGif">Create GIF</string>
+    <string name="S7ChooseVideoForGif">Choose a video for your GIF</string>
+    <string name="S7ChooseMediaForSticker">Photo, video or GIF for your sticker</string>
+    <string name="S7AnimatedStickerFailed">Couldn\'t read this video</string>
 </resources>
