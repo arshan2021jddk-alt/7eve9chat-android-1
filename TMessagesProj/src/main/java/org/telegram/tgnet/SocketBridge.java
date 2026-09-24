@@ -220,6 +220,16 @@ public class SocketBridge {
                 message.media_unread = true; // counts toward the "@" badge until opened
             }
             updates.updates.add(RestBridge.newMessageUpdateFor(message));
+            // "Wallpaper changed" also changes the chat background right away (both sides for "for both")
+            if (message instanceof TLRPC.TL_messageService && message.action instanceof TLRPC.TL_messageActionSetChatWallPaper) {
+                TLRPC.TL_messageActionSetChatWallPaper act = (TLRPC.TL_messageActionSetChatWallPaper) message.action;
+                TL_update.TL_updatePeerWallpaper wu = new TL_update.TL_updatePeerWallpaper();
+                wu.peer = message.peer_id;
+                wu.wallpaper = act.wallpaper;
+                wu.wallpaper_overridden = !act.for_both;
+                if (wu.wallpaper != null) wu.flags |= 1;
+                updates.updates.add(wu);
+            }
             updates.date = message.date;
             updates.seq = 0;
 

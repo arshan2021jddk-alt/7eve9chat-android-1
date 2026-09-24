@@ -1166,8 +1166,8 @@ public class ReactionsLayoutInBubble {
                     X = dp(6);
                     imageReceiver.setRoundRadius(dp(6));
                 } else {
-                    size = dp(17); // 7eve9chat: slightly smaller reaction icons
-                    X = dp(9);
+                    size = dp(12); // 7eve9chat: our emoji fill the whole frame - 2/3 of the old size
+                    X = dp(12);
                     imageReceiver.setRoundRadius(0);
                 }
                 int Y = (int) ((height - size) / 2f);

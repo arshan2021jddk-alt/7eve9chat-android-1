@@ -472,18 +472,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         versionView.setPadding(dp(21), dp(10), dp(21), dp(10));
         versionView.setGravity(Gravity.CENTER);
         versionView.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector), Theme.RIPPLE_MASK_ALL));
-        versionView.setOnClickListener(v -> {
-            versionViewPressCount++;
-            if (versionViewPressCount < 2 && !BuildVars.DEBUG_PRIVATE_VERSION) {
-                try {
-                    Toast.makeText(getParentActivity(), getString(R.string.DebugMenuLongPress), Toast.LENGTH_SHORT).show();
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-                return;
-            }
-            openDebugMenu();
-        });
+        // 7eve9Chat: no hidden debug menu behind the version line
 
         navigationBar = new View(context);
 //        fragmentView.addView(navigationBar, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 0, Gravity.BOTTOM | Gravity.FILL_HORIZONTAL));
@@ -737,18 +726,10 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
             items.add(UItem.asShadow(null));
 
         items.add(UItem.asHeader(getString(R.string.SettingsHelp)));
+        // 7eve9Chat: "Ask a Question" = chat with @admin, "Features" = the official channel;
+        // no FAQ / privacy policy pages and no debug section.
         items.add(SettingCell.Factory.of(17, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_ask, getString(R.string.AskAQuestion)));
-        items.add(SettingCell.Factory.of(18, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_faq, getString(R.string.TelegramFAQ)));
         items.add(SettingCell.Factory.of(23, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_features, getString(R.string.TelegramFeatures)));
-        items.add(SettingCell.Factory.of(19, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_policy, getString(R.string.PrivacyPolicy)));
-
-        if (BuildVars.LOGS_ENABLED || BuildVars.DEBUG_PRIVATE_VERSION) {
-            items.add(UItem.asShadow(null));
-            items.add(UItem.asHeader(getString(R.string.SettingsDebug)));
-            items.add(SettingCell.Factory.of(20, 0xFF55CA47, 0xFF27B434, 0, getString(R.string.DebugSendLogs)));
-            items.add(SettingCell.Factory.of(21, 0xFF55CA47, 0xFF27B434, 0, getString(R.string.DebugSendLastLogs)));
-            items.add(SettingCell.Factory.of(22, 0xFFF45255, 0xFFDF3955, 0, getString(R.string.DebugClearLogs)));
-        }
 
         items.add(UItem.asCustomShadow(versionView));
     }
@@ -854,7 +835,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
 
             case 17:
-                showDialog(AlertsCreator.createSupportAlert(this, resourceProvider));
+                getMessagesController().openByUserName("admin", this, 1);
                 break;
             case 18:
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.TelegramFaqUrl));
@@ -876,7 +857,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 if (MessagesController.getInstance(currentAccount).isFrozen()) {
                     AccountFrozenAlert.show(currentAccount);
                 } else {
-                    Browser.openUrl(getContext(), LocaleController.getString(R.string.TelegramFeaturesUrl));
+                    getMessagesController().openByUserName("seven9official", this, 1);
                 }
                 break;
             }

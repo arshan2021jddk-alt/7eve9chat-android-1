@@ -140,7 +140,47 @@ public class RestBridge {
     // TL int32 message id -> Mongo message id. idFromMongoIdInt32() is a
     // one-way hash (last 28 bits of the ObjectId), so edit/delete/react need
     // this map (populated by buildTLMessage()) to recover the real id.
-    private final java.util.concurrent.ConcurrentHashMap<Integer, String> messageMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+    // Filled while building messages. Messages shown from the local cache after
+    // an app restart (or sent from here, whose socket echo is dropped) are not in
+    // it yet: their TL id is the backend's message sequence number, so a miss is
+    // resolved with GET /messages/by-seq/<id> (never on the UI thread).
+    private final java.util.concurrent.ConcurrentHashMap<Integer, Long> messageLookupMisses = new java.util.concurrent.ConcurrentHashMap<>();
+    private final class MessageIdMap extends java.util.concurrent.ConcurrentHashMap<Integer, String> {
+        String getLocal(Integer key) {
+            return super.get(key);
+        }
+
+        @Override
+        public String get(Object key) {
+            String v = super.get(key);
+            if (v == null && key instanceof Integer && (Integer) key > 0
+                    && android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+                v = lookupMessageMongoId((Integer) key);
+                if (v != null) {
+                    super.put((Integer) key, v);
+                }
+            }
+            return v;
+        }
+    }
+    private final MessageIdMap messageMongoIdByTlId = new MessageIdMap();
+
+    private String lookupMessageMongoId(int tlId) {
+        Long missedAt = messageLookupMisses.get(tlId);
+        if (missedAt != null && System.currentTimeMillis() - missedAt < 60_000) {
+            return null;
+        }
+        try {
+            JSONObject r = request("GET", "/messages/by-seq/" + tlId, null, true);
+            String id = r.optString("_id", "");
+            if (id.length() == 24) {
+                return id;
+            }
+        } catch (Exception ignore) {
+        }
+        messageLookupMisses.put(tlId, System.currentTimeMillis());
+        return null;
+    }
 
     // TL sticker set id -> Mongo StickerSet id, populated by
     // handleGetAllStickers() so handleGetStickerSet() can resolve which set
@@ -527,8 +567,28 @@ public class RestBridge {
      * logcat tells us exactly what to implement next (search
      * "REST_BRIDGE_UNIMPLEMENTED").
      */
+    // Saved Messages: Telegram addresses my own chat as TL_inputPeerSelf (user_id 0).
+    // Every handler here resolves chats by user id, so it becomes my own user peer.
+    private void normalizeSelfPeers(TLObject request) {
+        if (selfMongoId == null) return;
+        for (String name : new String[]{"peer", "to_peer", "from_peer"}) {
+            try {
+                java.lang.reflect.Field f = request.getClass().getField(name);
+                if (f.get(request) instanceof TLRPC.TL_inputPeerSelf) {
+                    TLRPC.TL_inputPeerUser me = new TLRPC.TL_inputPeerUser();
+                    me.user_id = idFromMongoId(selfMongoId);
+                    f.set(request, me);
+                }
+            } catch (NoSuchFieldException ignore) {
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        }
+    }
+
     public boolean tryHandle(TLObject request, RequestDelegate onComplete) {
         maybeConnectSocket();
+        normalizeSelfPeers(request);
         try {
             if (handleSettingsRequest(request, onComplete)) {
                 return true;
@@ -1250,6 +1310,28 @@ public class RestBridge {
                 });
                 return true;
             }
+            // Chat themes / Telegram's wallpaper catalogue don't exist on this backend:
+            // empty lists (instead of an error) so the theme sheet shows no dead cells.
+            if (request instanceof TL_account.getChatThemes) {
+                TL_account.TL_themes themes = new TL_account.TL_themes();
+                themes.hash = 1;
+                complete(onComplete, themes, null);
+                return true;
+            }
+            if (request instanceof TL_account.Tl_getUniqueGiftChatThemes) {
+                TL_account.Tl_chatThemes themes = new TL_account.Tl_chatThemes();
+                themes.themes = new ArrayList<>();
+                themes.chats = new ArrayList<>();
+                themes.users = new ArrayList<>();
+                complete(onComplete, themes, null);
+                return true;
+            }
+            if (request instanceof TL_account.getWallPapers) {
+                TL_account.TL_wallPapers papers = new TL_account.TL_wallPapers();
+                papers.hash = 1;
+                complete(onComplete, papers, null);
+                return true;
+            }
             if (request instanceof TL_account.uploadWallPaper) {
                 handleUploadWallPaper((TL_account.uploadWallPaper) request, onComplete);
                 return true;
@@ -1438,7 +1520,7 @@ public class RestBridge {
                         : ((TLRPC.TL_channels_readMessageContents) request).id;
                 executor.execute(() -> {
                     for (Integer id : ids) {
-                        String mongoId = messageMongoIdByTlId.get(id);
+                        String mongoId = messageMongoIdByTlId.getLocal(id);
                         if (mongoId != null && viewOnceMessages.remove(mongoId)) {
                             try {
                                 // View-once media was opened: the backend deletes it.
@@ -4255,6 +4337,7 @@ public class RestBridge {
                 putReplyTo(body, req.reply_to);
                 JSONObject sent = request("POST", "/messages", body, true);
                 rememberConversation(req.peer, sent);
+                rememberMessageId(sent.getString("_id"));
 
                 TLRPC.TL_updateShortSentMessage update = new TLRPC.TL_updateShortSentMessage();
                 TLRPC.TL_messageMediaWebPage webMedia = req.no_webpage ? null : buildWebPageMedia(sent.optJSONObject("linkPreview"));
@@ -4672,7 +4755,7 @@ public class RestBridge {
                         JSONObject mine = conv.optJSONObject("wallpaperByUser") != null ? conv.optJSONObject("wallpaperByUser").optJSONObject(selfMongoId) : null;
                         JSONObject shared = conv.optJSONObject("chatWallpaper");
                         JSONObject wp = mine != null ? mine : shared;
-                        if (wp != null && jsonStr(wp, "url") != null) {
+                        if (wp != null && (jsonStr(wp, "url") != null || wp.optJSONObject("settings") != null)) {
                             full.wallpaper = buildWallPaper(jsonStr(wp, "url"), wp.optJSONObject("settings"));
                             full.flags |= TLObject.FLAG_24;
                         }
@@ -4790,17 +4873,22 @@ public class RestBridge {
     // messages.deleteMessages -> DELETE /messages/:id (one call per id)
     // ---------------------------------------------------------------
     private void handleDeleteMessages(TLRPC.TL_messages_deleteMessages req, RequestDelegate onComplete) {
-        deleteMessagesByTlIds(req.id, onComplete);
+        // "Also delete for <name>" (revoke) removes it for everyone; otherwise only for me
+        deleteMessagesByTlIds(req.id, req.revoke, onComplete);
     }
 
     private void deleteMessagesByTlIds(ArrayList<Integer> ids, RequestDelegate onComplete) {
+        deleteMessagesByTlIds(ids, true, onComplete); // channels / groups: always for everyone
+    }
+
+    private void deleteMessagesByTlIds(ArrayList<Integer> ids, boolean forEveryone, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
                 for (int tlId : ids) {
                     String mongoId = messageMongoIdByTlId.get(tlId);
                     if (mongoId != null) {
                         try {
-                            request("DELETE", "/messages/" + mongoId, null, true);
+                            request("DELETE", "/messages/" + mongoId + (forEveryone ? "" : "?forMe=1"), null, true);
                         } catch (Exception inner) {
                             FileLog.e(inner);
                         }
@@ -4998,6 +5086,9 @@ public class RestBridge {
         } else {
             item.media = buildPhotoMedia(mediaUrl);
         }
+        // Blurred cover while the story loads + its real shape
+        applyMediaInfo(item.media, story.optLong("fileSize", 0), story.optJSONObject("mediaMeta"));
+        applyStrippedThumb(item.media, jsonStr(story, "thumb"));
 
         String caption = story.optString("caption", null);
         if (caption != null && caption.length() > 0) {
@@ -5383,7 +5474,15 @@ public class RestBridge {
         return j;
     }
 
-    TLRPC.TL_wallPaper buildWallPaper(String url, JSONObject settings) {
+    TLRPC.WallPaper buildWallPaper(String url, JSONObject settings) {
+        if (url == null || url.isEmpty() || "null".equals(url)) {
+            // color / gradient wallpaper (no image)
+            TLRPC.TL_wallPaperNoFile wp = new TLRPC.TL_wallPaperNoFile();
+            wp.id = settings != null ? (settings.optLong("background_color", 0) << 24) ^ settings.optLong("second_background_color", 0) : 0;
+            wp.settings = wallpaperSettingsFromJson(settings);
+            wp.flags |= TLObject.FLAG_2; // settings present
+            return wp;
+        }
         TLRPC.TL_wallPaper wp = new TLRPC.TL_wallPaper();
         String full = absoluteUrl(url);
         TLRPC.TL_messageMediaDocument media = buildDocumentMedia(full, "image/jpeg", "wallpaper.jpg", "file");
@@ -5391,6 +5490,12 @@ public class RestBridge {
         wp.access_hash = 1;
         wp.slug = "7e9" + Long.toHexString(wp.id);
         wp.document = media.document;
+        wp.settings = wallpaperSettingsFromJson(settings);
+        wp.flags |= TLObject.FLAG_2; // settings present
+        return wp;
+    }
+
+    private static TLRPC.TL_wallPaperSettings wallpaperSettingsFromJson(JSONObject settings) {
         TLRPC.TL_wallPaperSettings st = new TLRPC.TL_wallPaperSettings();
         if (settings != null) {
             st.flags = settings.optInt("flags", 0);
@@ -5403,9 +5508,7 @@ public class RestBridge {
             st.third_background_color = settings.optInt("third_background_color", 0);
             st.fourth_background_color = settings.optInt("fourth_background_color", 0);
         }
-        wp.settings = st;
-        wp.flags |= TLObject.FLAG_2; // settings present
-        return wp;
+        return st;
     }
 
     // System messages with a structured action become service messages
@@ -5438,7 +5541,7 @@ public class RestBridge {
                 file = assembleUpload(req.file);
                 String mime = req.mime_type != null && !req.mime_type.isEmpty() ? req.mime_type : "image/jpeg";
                 JSONObject resp = requestMultipart("POST", "/messages/upload", null, "file", file, "wallpaper" + extensionForMime(mime), mime);
-                TLRPC.TL_wallPaper wp = buildWallPaper(resp.getString("url"), wallpaperSettingsToJson(req.settings));
+                TLRPC.WallPaper wp = buildWallPaper(resp.getString("url"), wallpaperSettingsToJson(req.settings));
                 savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, wp, null);
             } catch (Exception e) {
@@ -5461,10 +5564,15 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 String path = req.wallpaper instanceof TLRPC.TL_inputWallPaper
                         ? relativeUploadPath(mediaUrlById.get(((TLRPC.TL_inputWallPaper) req.wallpaper).id)) : null;
-                if (req.revert || path == null) {
+                // Plain color / gradient wallpapers have no file, only their colors
+                boolean noFile = !req.revert && path == null && req.settings != null
+                        && (req.wallpaper == null || req.wallpaper instanceof TLRPC.TL_inputWallPaperNoFile)
+                        && (req.settings.background_color != 0 || req.settings.second_background_color != 0);
+                if (req.revert || (path == null && !noFile)) {
                     body.put("revert", true);
                 } else {
-                    body.put("url", path);
+                    if (path != null) body.put("url", path);
+                    if (noFile) body.put("noFile", true);
                     body.put("forBoth", req.for_both);
                     body.put("settings", wallpaperSettingsToJson(req.settings));
                 }
@@ -8634,7 +8742,9 @@ public class RestBridge {
             return true;
         }
         if (peer != null && peer.user_id != 0) {
-            String receiverMongoId = userMongoIdByTlId.get(peer.user_id);
+            String receiverMongoId = selfMongoId != null && peer.user_id == idFromMongoId(selfMongoId)
+                    ? selfMongoId // Saved Messages (the server uses my saved chat)
+                    : userMongoIdByTlId.get(peer.user_id);
             if (receiverMongoId != null) {
                 body.put("receiverId", receiverMongoId);
                 return true;

@@ -834,6 +834,8 @@ public class VoIPHelper {
 		if (fragment == null || fragment.getParentActivity() == null) {
 			return;
 		}
-		JoinCallAlert.checkFewUsers(fragment.getParentActivity(), -currentChat.id, accountInstance, param -> startCall(currentChat, peer, null, true, fragment.getParentActivity(), fragment, accountInstance));
+		// 7eve9chat: voice chats run on our own WebRTC mesh; "join as" (phone.getGroupCallJoinAs)
+		// doesn't exist there, and waiting for it meant the button did nothing.
+		startCall(currentChat, peer, null, true, fragment.getParentActivity(), fragment, accountInstance);
     }
 }

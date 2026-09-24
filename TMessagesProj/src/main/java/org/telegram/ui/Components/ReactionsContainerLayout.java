@@ -2106,10 +2106,11 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
             } else if (currentReaction.emojicon != null && Emoji.getEmojiBigDrawable(currentReaction.emojicon) != null) {
-                // 7eve9chat: picker shows the app's own emoji (same look as in messages)
-                enterImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
-                loopImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
-                pressedBackupImageView.getImageReceiver().setImageBitmap(Emoji.getEmojiBigDrawable(currentReaction.emojicon));
+                // 7eve9chat: picker shows the app's own emoji (same look as in messages),
+                // at 2/3 of the cell - they fill the frame, Telegram's icons have padding
+                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
                 if (lockIconView != null) {
                     lockIconView.setImageReceiver(loopImageView.getImageReceiver());
                 }
@@ -2688,4 +2689,47 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
         return starSelectedGradientPaint;
     }
 
+
+    // Draws an emoji at 2/3 of its bounds, centered (7eve9chat reactions)
+    private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
+        if (d == null) return null;
+        return new android.graphics.drawable.Drawable() {
+            private int alpha = 255;
+
+            @Override
+            public void draw(@NonNull Canvas canvas) {
+                android.graphics.Rect b = getBounds();
+                int w = b.width() * 2 / 3, h = b.height() * 2 / 3;
+                int l = b.centerX() - w / 2, t = b.centerY() - h / 2;
+                d.setBounds(l, t, l + w, t + h);
+                d.setAlpha(alpha);
+                d.draw(canvas);
+            }
+
+            @Override
+            public void setAlpha(int a) {
+                alpha = a;
+            }
+
+            @Override
+            public void setColorFilter(@androidx.annotation.Nullable android.graphics.ColorFilter colorFilter) {
+                d.setColorFilter(colorFilter);
+            }
+
+            @Override
+            public int getOpacity() {
+                return android.graphics.PixelFormat.TRANSLUCENT;
+            }
+
+            @Override
+            public int getIntrinsicWidth() {
+                return d.getIntrinsicWidth();
+            }
+
+            @Override
+            public int getIntrinsicHeight() {
+                return d.getIntrinsicHeight();
+            }
+        };
+    }
 }

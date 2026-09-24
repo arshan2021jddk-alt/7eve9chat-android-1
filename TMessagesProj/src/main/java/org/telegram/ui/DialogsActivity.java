@@ -13778,8 +13778,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
             final String proxyAddress = preferences.getString("proxy_ip", "");
             final boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
-            final boolean proxyVisible = proxyEnabled && !TextUtils.isEmpty(proxyAddress)
-                    || getMessagesController().blockedCountry && !SharedConfig.proxyList.isEmpty();
+            final boolean proxyVisible = false; // 7eve9Chat: no MTProto proxies
 
             if (proxyVisible) {
                 io.addGap();
