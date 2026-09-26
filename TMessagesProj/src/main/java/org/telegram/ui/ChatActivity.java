@@ -34062,7 +34062,7 @@ public class ChatActivity extends BaseFragment implements
             }
             case OPTION_EDIT_TODO:
             case OPTION_ADD_TO_TODO: {
-                if (!getUserConfig().isPremium()) {
+                if (false) { // 7eve9chat: checklists are open to everyone
                     showDialog(new PremiumFeatureBottomSheet(ChatActivity.this, PremiumPreviewFragment.PREMIUM_FEATURE_TODO, false));
                 } else {
                     final MessageObject object = selectedObject;
@@ -40631,7 +40631,7 @@ public class ChatActivity extends BaseFragment implements
                     .createSimpleBulletin(R.raw.passcode_lock_close, AndroidUtilities.replaceTags(formatString(R.string.TodoCompleteForbidden, DialogObject.getName(currentAccount, fromId))))
                     .show(true);
                 return false;
-            } else if (!getUserConfig().isPremium()) {
+            } else if (false) { // 7eve9chat: checklists are open to everyone
                 BulletinFactory.of(ChatActivity.this)
                     .createSimpleBulletin(R.raw.star_premium_2, AndroidUtilities.premiumText(getString(R.string.TodoPremiumRequired), () -> {
                         showDialog(new PremiumFeatureBottomSheet(ChatActivity.this, PremiumPreviewFragment.PREMIUM_FEATURE_TODO, false));

@@ -893,6 +893,15 @@ public class ReactionsEffectOverlay {
                     getImageReceiver().getLottieAnimation().start();
                 }
             }
+            if (this == emojiImageView && !isStories) {
+                // 7eve9chat: our reaction animations fill the whole frame (Telegram's leave
+                // a wide margin), so the emoji that pops up when reacting is drawn at 1/3
+                canvas.save();
+                canvas.scale(1f / 3f, 1f / 3f, getMeasuredWidth() / 2f, getMeasuredHeight() / 2f);
+                super.onDraw(canvas);
+                canvas.restore();
+                return;
+            }
             super.onDraw(canvas);
         }
 

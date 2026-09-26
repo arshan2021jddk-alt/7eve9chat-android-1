@@ -23710,9 +23710,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean richEditorAllowed() {
-        // 7eve9chat: rich "articles" need server-side pages we don't have; the Article
-        // composer sends them as normal messages with formatting instead
-        if (true) return false;
+        // 7eve9chat: articles are stored by our server as the app's own serialized
+        // rich message (RestBridge.putRichMessage), open to everyone
+        if (true) return true;
         switch (config.richMessagePosting.get()) {
             case "premium":
                 return getUserConfig().isPremium();

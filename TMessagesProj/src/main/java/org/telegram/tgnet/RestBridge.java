@@ -9,6 +9,7 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
+import org.telegram.tgnet.tl.TL_iv;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_bots;
 import org.telegram.tgnet.tl.TL_keyboard;
@@ -293,7 +294,7 @@ public class RestBridge {
     private TLRPC.TL_document buildTgsDocument(String url) {
         TLRPC.TL_document document = new TLRPC.TL_document();
         document.id = idForUrl(url);
-        document.access_hash = 0;
+        document.access_hash = 1; // non-zero: the app re-sends it by id (existingFileUrl) instead of re-uploading
         document.file_reference = new byte[0];
         document.date = 1;
         document.mime_type = "application/x-tgsticker";
@@ -346,7 +347,7 @@ public class RestBridge {
             return null;
         }
         java.util.LinkedHashMap<String, Integer> counts = new java.util.LinkedHashMap<>();
-        String mine = null;
+        ArrayList<String> mine = new ArrayList<>(); // Premium: up to 3 of my own
         for (int i = 0; i < reactions.length(); i++) {
             JSONObject r = reactions.optJSONObject(i);
             if (r == null) continue;
@@ -354,8 +355,8 @@ public class RestBridge {
             if (emoji.isEmpty()) continue;
             Integer c = counts.get(emoji);
             counts.put(emoji, c == null ? 1 : c + 1);
-            if (selfMongoId != null && selfMongoId.equals(refId(r, "user"))) {
-                mine = emoji;
+            if (selfMongoId != null && selfMongoId.equals(refId(r, "user")) && !mine.contains(emoji)) {
+                mine.add(emoji);
             }
         }
         if (counts.isEmpty()) {
@@ -375,9 +376,9 @@ public class RestBridge {
                 count.reaction = emoji;
             }
             count.count = e.getValue();
-            if (e.getKey().equals(mine)) {
+            if (mine.contains(e.getKey())) {
                 count.chosen = true;
-                count.chosen_order = 1;
+                count.chosen_order = mine.indexOf(e.getKey()) + 1;
                 count.flags |= TLObject.FLAG_0;
             }
             result.results.add(count);
@@ -3834,6 +3835,58 @@ public class RestBridge {
         }
     }
 
+    // Article (Telegram's rich message): the server stores the serialized
+    // TL_iv.RichMessage as an opaque blob, plus the files its photos / documents
+    // point at so every reader can map their ids back to URLs.
+    private void putRichMessage(JSONObject body, TL_iv.TL_inputRichMessage in) throws Exception {
+        TL_iv.RichMessage rich = new TL_iv.RichMessage();
+        rich.rtl = in.rtl;
+        for (TL_iv.PageBlock b : in.blocks) {
+            if (!(b instanceof TL_iv.inputPageBlockMap)) rich.blocks.add(b);
+        }
+        JSONArray files = new JSONArray();
+        for (TLRPC.InputPhoto p : in.photos) {
+            String path = relativeUploadPath(mediaUrlById.get(p.id));
+            if (path == null) continue;
+            rich.photos.add(buildPhotoMedia(absoluteUrl(path)).photo);
+            files.put(path);
+        }
+        for (TLRPC.InputDocument d : in.documents) {
+            String path = relativeUploadPath(mediaUrlById.get(d.id));
+            if (path == null) continue;
+            String kind = documentKindById.get(d.id);
+            String lower = path.toLowerCase(Locale.US);
+            String mime = lower.endsWith(".mp4") ? "video/mp4" : lower.endsWith(".webp") ? "image/webp" : lower.endsWith(".mp3") ? "audio/mpeg"
+                    : lower.endsWith(".ogg") ? "audio/ogg" : "application/octet-stream";
+            rich.documents.add(buildDocumentMedia(absoluteUrl(path), mime, path.substring(path.lastIndexOf('/') + 1), kind == null ? "file" : kind).document);
+            files.put(path);
+        }
+        SerializedData data = new SerializedData(rich.getObjectSize());
+        rich.serializeToStream(data);
+        body.put("richMessage", android.util.Base64.encodeToString(data.toByteArray(), android.util.Base64.NO_WRAP));
+        data.cleanup();
+        if (files.length() > 0) body.put("richMedia", files);
+    }
+
+    private TL_iv.RichMessage richMessageFromJson(JSONObject m) {
+        String b64 = jsonStr(m, "richMessage");
+        if (b64 == null || b64.isEmpty()) return null;
+        JSONArray files = m.optJSONArray("richMedia");
+        for (int i = 0; files != null && i < files.length(); i++) {
+            String f = files.optString(i, "");
+            if (f.startsWith("/uploads/")) idForUrl(absoluteUrl(f)); // registers id -> url for downloads
+        }
+        try {
+            SerializedData data = new SerializedData(android.util.Base64.decode(b64, android.util.Base64.DEFAULT));
+            TL_iv.RichMessage rich = TL_iv.RichMessage.TLdeserialize(data, data.readInt32(false), false);
+            data.cleanup();
+            return rich;
+        } catch (Exception e) {
+            FileLog.e(e);
+            return null;
+        }
+    }
+
     private String relativeUploadPath(String url) {
         if (url == null) return null;
         int i = url.indexOf("/uploads/");
@@ -3862,6 +3915,9 @@ public class RestBridge {
             long docId = ((TLRPC.TL_inputMediaDocument) media).id.id;
             String url = mediaUrlById.get(docId);
             String path = relativeUploadPath(url);
+            if (path == null && url != null && url.contains("/api/botapi/gif-media?")) {
+                path = url.substring(url.indexOf("/api/botapi/gif-media?")); // a GIF from the GIF panel
+            }
             if (path == null) {
                 throw new RestException(400, "MEDIA_INVALID");
             }
@@ -4397,6 +4453,10 @@ public class RestBridge {
                 }
                 body.put("text", req.message);
                 body.put("type", "text");
+                if (req.rich_message instanceof TL_iv.TL_inputRichMessage) {
+                    putRichMessage(body, (TL_iv.TL_inputRichMessage) req.rich_message);
+                    if (req.message == null || req.message.isEmpty()) body.put("text", "📄");
+                }
                 if (req.no_webpage) body.put("noLinkPreview", true);
                 JSONArray formatting = entitiesToJson(req.entities);
                 if (formatting.length() > 0) body.put("entities", formatting);
@@ -4980,33 +5040,26 @@ public class RestBridge {
                     complete(onComplete, null, restError(404, "Unknown message"));
                     return;
                 }
-                String emoji = null;
-                if (!req.reaction.isEmpty() && req.reaction.get(0) instanceof TLRPC.TL_reactionEmoji) {
-                    emoji = ((TLRPC.TL_reactionEmoji) req.reaction.get(0)).emoticon;
-                } else if (!req.reaction.isEmpty() && req.reaction.get(0) instanceof TLRPC.TL_reactionCustomEmoji) {
-                    // Premium emoji reaction: stored by its file so every client can render it
-                    String path = relativeUploadPath(mediaUrlById.get(((TLRPC.TL_reactionCustomEmoji) req.reaction.get(0)).document_id));
-                    if (path != null) emoji = "custom:" + path;
-                } else if (req.reaction.isEmpty()) {
-                    // The backend toggles: re-sending my current emoji removes it.
-                    emoji = myReactionByMessage.get(mongoId);
+                // Telegram sends the whole list I want on the message (Premium: up to 3,
+                // empty = remove mine); the backend replaces my reactions with it.
+                JSONArray emojis = new JSONArray();
+                for (TLRPC.Reaction r : req.reaction) {
+                    if (r instanceof TLRPC.TL_reactionEmoji) {
+                        emojis.put(((TLRPC.TL_reactionEmoji) r).emoticon);
+                    } else if (r instanceof TLRPC.TL_reactionCustomEmoji) {
+                        // Premium emoji reaction: stored by its file so every client can render it
+                        String path = relativeUploadPath(mediaUrlById.get(((TLRPC.TL_reactionCustomEmoji) r).document_id));
+                        if (path != null) emojis.put("custom:" + path);
+                    }
                 }
-                if (emoji != null) {
-                    JSONObject body = new JSONObject();
-                    body.put("emoji", emoji);
-                    JSONObject updated = request("POST", "/messages/" + mongoId + "/react", body, true);
-                    rememberMyReaction(mongoId, updated.optJSONArray("reactions"));
-                    TLRPC.TL_updates updates = new TLRPC.TL_updates();
-                    updates.updates.add(reactionsUpdate(req.peer, req.msg_id, updated.optJSONArray("reactions")));
-                    updates.date = (int) (System.currentTimeMillis() / 1000L);
-                    complete(onComplete, updates, null);
-                    return;
-                }
-                // Removing a reaction (empty list) isn't distinguishable from
-                // "react with nothing" on this backend's toggle endpoint - the
-                // UI already updates optimistically, so this is a known gap
-                // rather than a crash risk.
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                JSONObject body = new JSONObject();
+                body.put("emojis", emojis);
+                JSONObject updated = request("POST", "/messages/" + mongoId + "/react", body, true);
+                rememberMyReaction(mongoId, updated.optJSONArray("reactions"));
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(reactionsUpdate(req.peer, req.msg_id, updated.optJSONArray("reactions")));
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -5183,6 +5236,7 @@ public class RestBridge {
                 TLRPC.TL_messages_allStickers result = new TLRPC.TL_messages_allStickers();
                 for (int i = 0; i < sets.length(); i++) {
                     JSONObject s = sets.getJSONObject(i);
+                    if (s.optBoolean("isEmoji", false)) continue; // premium emoji packs live in the emoji keyboard
                     String mongoId = s.getString("_id");
                     long tlId = idFromMongoId(mongoId);
                     stickerSetMongoIdById.put(tlId, mongoId);
@@ -5236,6 +5290,12 @@ public class RestBridge {
                     JSONObject st = stickers.getJSONObject(i);
                     String url = absoluteUrl(st.getString("url"));
                     TLRPC.TL_document doc = buildStickerDocument(url, set);
+                    String alt = st.optString("name", "");
+                    if (!alt.isEmpty() && alt.codePointCount(0, alt.length()) <= 4) {
+                        for (TLRPC.DocumentAttribute a : doc.attributes) {
+                            if (a instanceof TLRPC.TL_documentAttributeCustomEmoji || a instanceof TLRPC.TL_documentAttributeSticker) a.alt = alt;
+                        }
+                    }
                     result.documents.add(doc);
                 }
                 complete(onComplete, result, null);
@@ -9888,6 +9948,8 @@ public class RestBridge {
         String type = m.optString("type", "text");
         String text = jsonStr(m, "text");
         if (text == null) text = "";
+        msg.rich_message = richMessageFromJson(m);
+        if (msg.rich_message != null && "📄".equals(text)) text = "";
         msg.message = text;
         ArrayList<TLRPC.MessageEntity> entities = parseEntities(text);
         entities.addAll(entitiesFromJson(m.optJSONArray("entities")));
@@ -10543,7 +10605,7 @@ public class RestBridge {
         }
         TLRPC.TL_document document = new TLRPC.TL_document();
         document.id = idForUrl(url);
-        document.access_hash = 0;
+        document.access_hash = 1; // non-zero: the app re-sends it by id (existingFileUrl) instead of re-uploading
         document.file_reference = new byte[0];
         document.date = (int) (System.currentTimeMillis() / 1000L);
         document.mime_type = mimeType;
