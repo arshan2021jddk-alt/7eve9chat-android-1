@@ -47,6 +47,23 @@ public class BuildVars {
         if (ApplicationLoader.applicationContext != null) {
             SharedPreferences sharedPreferences = ApplicationLoader.applicationContext.getSharedPreferences("systemConfig", Context.MODE_PRIVATE);
             LOGS_ENABLED = DEBUG_VERSION || sharedPreferences.getBoolean("logsEnabled", DEBUG_VERSION);
+            // 7eve9chat: keep the last crash; RestBridge sends it to our server on the next start
+            final Thread.UncaughtExceptionHandler appHandler = Thread.getDefaultUncaughtExceptionHandler();
+            Thread.setDefaultUncaughtExceptionHandler((thread, exception) -> {
+                try {
+                    java.io.StringWriter trace = new java.io.StringWriter();
+                    exception.printStackTrace(new java.io.PrintWriter(trace));
+                    String report = "app " + BUILD_VERSION_STRING + " android " + android.os.Build.VERSION.SDK_INT
+                            + " " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + "\nthread " + thread.getName() + "\n" + trace;
+                    java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(ApplicationLoader.applicationContext.getFilesDir(), "7e9_crash.txt"));
+                    out.write(report.getBytes("UTF-8"));
+                    out.close();
+                } catch (Throwable ignore) {
+                }
+                if (appHandler != null) {
+                    appHandler.uncaughtException(thread, exception);
+                }
+            });
             if (LOGS_ENABLED) {
                 final Thread.UncaughtExceptionHandler pastHandler = Thread.getDefaultUncaughtExceptionHandler();
                 Thread.setDefaultUncaughtExceptionHandler((thread, exception) -> {

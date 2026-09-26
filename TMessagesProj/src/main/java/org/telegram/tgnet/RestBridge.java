@@ -533,6 +533,24 @@ public class RestBridge {
     // once from the first real request and once right after login.
     private volatile boolean socketConnectAttempted = false;
 
+    // The last crash (saved by BuildVars' handler) goes to the server once, so it can be fixed
+    private void sendPendingCrashReport() {
+        executor.execute(() -> {
+            java.io.File file = new java.io.File(ApplicationLoader.applicationContext.getFilesDir(), "7e9_crash.txt");
+            if (!file.exists()) return;
+            try {
+                byte[] data = new byte[(int) Math.min(file.length(), 60000)];
+                java.io.FileInputStream in = new java.io.FileInputStream(file);
+                int n = in.read(data);
+                in.close();
+                request("POST", "/crash", new JSONObject().put("report", new String(data, 0, Math.max(n, 0), StandardCharsets.UTF_8)), true);
+                file.delete();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+    }
+
     public void ensureSocketConnected() {
         if (authToken != null && selfMongoId != null) {
             socketConnectAttempted = true;
@@ -544,6 +562,7 @@ public class RestBridge {
         if (!socketConnectAttempted && authToken != null && selfMongoId != null) {
             socketConnectAttempted = true;
             SocketBridge.getInstance(currentAccount).connect();
+            sendPendingCrashReport();
         }
     }
 
@@ -1343,6 +1362,10 @@ public class RestBridge {
             }
             if (request instanceof TL_account.uploadWallPaper) {
                 handleUploadWallPaper((TL_account.uploadWallPaper) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_setChatTheme) {
+                handleSetChatTheme((TLRPC.TL_messages_setChatTheme) request, onComplete);
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_setChatWallPaper) {
@@ -4785,6 +4808,11 @@ public class RestBridge {
                 boolean self = req.id instanceof TLRPC.TL_inputUserSelf
                         || (selfMongoId != null && req.id.user_id == idFromMongoId(selfMongoId));
                 JSONObject userJson = fetchUserJson(req.id);
+                // saved on the server: my contact list and block list stay right on every device, for good
+                String theirMongoId = userJson.optString("_id", "");
+                if (!self && userJson.has("isMyContact") && theirMongoId.length() == 24) {
+                    if (userJson.optBoolean("isMyContact")) contactMongoIds.add(theirMongoId); else contactMongoIds.remove(theirMongoId);
+                }
 
                 TLRPC.TL_users_userFull result = new TLRPC.TL_users_userFull();
                 TLRPC.TL_user user = buildTLUser(userJson, self);
@@ -4793,6 +4821,7 @@ public class RestBridge {
                 TLRPC.TL_userFull full = new TLRPC.TL_userFull();
                 full.id = user.id;
                 full.user = user;
+                full.blocked = !self && userJson.optBoolean("blockedByMe", false);
                 String about = userJson.optString("about", null);
                 if (about != null && about.trim().length() > 0 && !"null".equals(about)) {
                     full.about = about;
@@ -4875,9 +4904,19 @@ public class RestBridge {
 
                 // Chat wallpaper (shared, or my own override) for this private chat
                 String privateConvId = self ? null : conversationIdByUserPeer.get(user.id);
+                if (privateConvId == null && !self) {
+                    TLRPC.TL_inputPeerUser ip = new TLRPC.TL_inputPeerUser();
+                    ip.user_id = user.id;
+                    privateConvId = fetchPrivateConversationId(ip);
+                }
                 if (privateConvId != null) {
                     try {
                         JSONObject conv = request("GET", "/messages/conversations/" + privateConvId, null, true);
+                        String themeEmoticon = jsonStr(conv, "chatTheme");
+                        if (themeEmoticon != null && !themeEmoticon.isEmpty()) {
+                            full.theme = TLRPC.ChatTheme.ofEmoticon(themeEmoticon);
+                            full.flags |= TLObject.FLAG_15;
+                        }
                         JSONObject mine = conv.optJSONObject("wallpaperByUser") != null ? conv.optJSONObject("wallpaperByUser").optJSONObject(selfMongoId) : null;
                         JSONObject shared = conv.optJSONObject("chatWallpaper");
                         JSONObject wp = mine != null ? mine : shared;
@@ -5641,6 +5680,22 @@ public class RestBridge {
     // (e.g. "wallpaper changed"); everything else is a normal message.
     TLRPC.Message buildAnyMessage(JSONObject m, TLRPC.Peer peer) throws Exception {
         JSONObject action = m.optJSONObject("systemAction");
+        if ("system".equals(m.optString("type")) && action != null && "set_chat_theme".equals(action.optString("type"))) {
+            TLRPC.TL_message base = buildTLMessage(m, peer);
+            TLRPC.TL_messageService service = new TLRPC.TL_messageService();
+            service.id = base.id;
+            service.date = base.date;
+            service.peer_id = base.peer_id;
+            service.dialog_id = base.dialog_id;
+            service.from_id = base.from_id;
+            service.out = base.out;
+            if (service.from_id != null) service.flags |= TLObject.FLAG_8;
+            TLRPC.TL_messageActionSetChatTheme setTheme = new TLRPC.TL_messageActionSetChatTheme();
+            String emoticon = jsonStr(action, "emoticon");
+            setTheme.theme = emoticon == null || emoticon.isEmpty() ? null : TLRPC.ChatTheme.ofEmoticon(emoticon);
+            service.action = setTheme;
+            return service;
+        }
         if ("system".equals(m.optString("type")) && action != null && "set_chat_wallpaper".equals(action.optString("type"))) {
             TLRPC.TL_message base = buildTLMessage(m, peer);
             TLRPC.TL_messageService service = new TLRPC.TL_messageService();
@@ -5675,6 +5730,33 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             } finally {
                 if (file != null) file.delete();
+            }
+        });
+    }
+
+    // Chat theme: saved on the server for both people until someone changes it
+    private void handleSetChatTheme(TLRPC.TL_messages_setChatTheme req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String convId = resolveConversationId(req.peer);
+                if (convId == null) convId = fetchPrivateConversationId(req.peer);
+                if (convId == null) {
+                    complete(onComplete, null, tlError(400, "PEER_ID_INVALID"));
+                    return;
+                }
+                String emoticon = req.theme instanceof TLRPC.Tl_inputChatTheme ? ((TLRPC.Tl_inputChatTheme) req.theme).emoticon : "";
+                JSONObject resp = request("PUT", "/conversations/" + convId + "/theme", new JSONObject().put("emoticon", emoticon == null ? "" : emoticon), true);
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                if (resp.has("_id")) {
+                    rememberMessageId(resp.getString("_id")); // the socket echo is ours
+                    TLRPC.Message service = buildAnyMessage(resp, peerFromInput(req.peer));
+                    updates.updates.add(newMessageUpdateFor(service));
+                    updates.date = service.date;
+                }
+                complete(onComplete, updates, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
             }
         });
     }
@@ -9807,8 +9889,10 @@ public class RestBridge {
             try {
                 String conversationId = resolveConversationId(req.peer);
                 if (conversationId == null) {
-                    // Peer not seen yet (cold start before dialogs loaded) - refuse
-                    // gracefully instead of guessing.
+                    conversationId = fetchPrivateConversationId(req.peer);
+                }
+                if (conversationId == null) {
+                    // No chat with this user on the server yet
                     TLRPC.TL_messages_messages empty = new TLRPC.TL_messages_messages();
                     complete(onComplete, empty, null);
                     return;
@@ -9830,7 +9914,22 @@ public class RestBridge {
                     }
                     path += "&before=" + beforeMongoId;
                 }
-                JSONArray messages = requestArray("GET", path, null, true);
+                JSONArray messages;
+                try {
+                    messages = requestArray("GET", path, null, true);
+                } catch (RestException e) {
+                    // a stale id (the chat was deleted and started again): look it up once more
+                    String fresh = (e.statusCode == 403 || e.statusCode == 404) && req.peer.user_id != 0 && req.offset_id == 0
+                            ? fetchPrivateConversationId(req.peer) : null;
+                    if (fresh == null || fresh.equals(conversationId)) {
+                        if (e.statusCode == 403 || e.statusCode == 404) {
+                            complete(onComplete, new TLRPC.TL_messages_messages(), null);
+                            return;
+                        }
+                        throw e;
+                    }
+                    messages = requestArray("GET", "/messages/" + fresh + "?page=1&limit=" + limit, null, true);
+                }
 
                 TLRPC.TL_messages_messages result = new TLRPC.TL_messages_messages();
                 for (int i = 0; i < messages.length(); i++) {
@@ -9855,6 +9954,24 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             }
         });
+    }
+
+    // A private chat the app has no conversation id for (fresh install, chat opened
+    // from a profile / link / bot before the dialog list loaded): ask the server.
+    private String fetchPrivateConversationId(TLRPC.InputPeer peer) {
+        if (peer == null || peer.user_id == 0) return null;
+        String userMongoId = selfMongoId != null && peer.user_id == idFromMongoId(selfMongoId) ? selfMongoId : userMongoIdByTlId.get(peer.user_id);
+        if (userMongoId == null) return null;
+        try {
+            String convId = request("GET", "/messages/private-with/" + userMongoId, null, true).optString("conversationId", "");
+            if (convId.length() != 24) return null;
+            conversationIdByUserPeer.put(peer.user_id, convId);
+            savePeerMap("peerMapUser", conversationIdByUserPeer);
+            SocketBridge.getInstance(currentAccount).joinConversation(convId);
+            return convId;
+        } catch (Exception e) {
+            return null; // 404: no chat yet
+        }
     }
 
     private String resolveConversationId(TLRPC.InputPeer peer) {
@@ -9890,11 +10007,12 @@ public class RestBridge {
     }
 
     private void rememberConversation(TLRPC.InputPeer peer, JSONObject sentMessage) {
-        if (peer == null || peer.user_id == 0 || conversationIdByUserPeer.containsKey(peer.user_id)) {
+        if (peer == null || peer.user_id == 0) {
             return;
         }
         String convId = sentMessage.optString("conversationId", "");
-        if (convId.length() == 24) {
+        // a new chat (or one re-created after being deleted) replaces an old id
+        if (convId.length() == 24 && !convId.equals(conversationIdByUserPeer.get(peer.user_id))) {
             conversationIdByUserPeer.put(peer.user_id, convId);
             savePeerMap("peerMapUser", conversationIdByUserPeer);
         }
