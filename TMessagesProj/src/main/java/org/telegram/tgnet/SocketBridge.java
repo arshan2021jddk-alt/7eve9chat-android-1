@@ -95,7 +95,10 @@ public class SocketBridge {
         socket.on("message_reaction", args -> onMessageReaction(args));
         socket.on("pins_updated", args -> onPinsUpdated(args));
         socket.on("conversation_updated", args -> onConversationUpdated(args));
-        socket.on("removed_from_conversation", args -> refreshDialogs());
+        socket.on("removed_from_conversation", args -> {
+            onRemovedFromConversation(args);
+            refreshDialogs();
+        });
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
         socket.on("gifts_changed", args -> onGiftsChanged(args));
@@ -355,6 +358,44 @@ public class SocketBridge {
     // only pages *older* dialogs, and after the first load it considers the
     // list complete, so new chats never showed up and a restart with an empty
     // cache left the list empty until the next login.)
+    // Banned / removed from a group or channel: like Telegram it becomes "forbidden" -
+    // the chat closes and leaves the list; its info and messages are no longer open
+    private void onRemovedFromConversation(Object... args) {
+        try {
+            if (args.length == 0 || args[0] == null) return;
+            String conversationId = String.valueOf(args[0]);
+            TLRPC.Peer peer = RestBridge.getInstance(currentAccount).resolvePeerForConversationId(conversationId);
+            if (peer == null || (peer.channel_id == 0 && peer.chat_id == 0)) return;
+            long chatId = peer.channel_id != 0 ? peer.channel_id : peer.chat_id;
+            TLRPC.Chat old = AccountInstance.getInstance(currentAccount).getMessagesController().getChat(chatId);
+            TLRPC.TL_updates updates = new TLRPC.TL_updates();
+            if (old == null || old instanceof TLRPC.TL_channel || peer.channel_id != 0) {
+                TLRPC.TL_channelForbidden forbidden = new TLRPC.TL_channelForbidden();
+                forbidden.id = chatId;
+                forbidden.access_hash = old != null ? old.access_hash : 0;
+                forbidden.title = old != null ? old.title : "";
+                forbidden.broadcast = old != null && old.broadcast;
+                forbidden.megagroup = old != null && old.megagroup;
+                updates.chats.add(forbidden);
+                TL_update.TL_updateChannel u = new TL_update.TL_updateChannel();
+                u.channel_id = chatId;
+                updates.updates.add(u);
+            } else {
+                TLRPC.TL_chatForbidden forbidden = new TLRPC.TL_chatForbidden();
+                forbidden.id = chatId;
+                forbidden.title = old.title;
+                updates.chats.add(forbidden);
+                TL_update.TL_updateChat u = new TL_update.TL_updateChat();
+                u.chat_id = chatId;
+                updates.updates.add(u);
+            }
+            updates.date = (int) (System.currentTimeMillis() / 1000L);
+            deliver(updates);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
     private void refreshDialogs() {
         syncDialogs(0);
     }

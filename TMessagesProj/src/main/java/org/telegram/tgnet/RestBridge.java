@@ -1364,6 +1364,18 @@ public class RestBridge {
                 handleUploadWallPaper((TL_account.uploadWallPaper) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_channels_updateEmojiStatus) {
+                TLRPC.TL_channels_updateEmojiStatus req = (TLRPC.TL_channels_updateEmojiStatus) request;
+                JSONObject body = new JSONObject();
+                Long docId = org.telegram.messenger.UserObject.getEmojiStatusDocumentId(req.emoji_status);
+                String path = docId != null ? relativeUploadPath(mediaUrlById.get(docId)) : null;
+                if (path != null) {
+                    body.put("url", path);
+                    if (req.emoji_status.until > 0) body.put("until", req.emoji_status.until);
+                }
+                handleSimpleConversationCall(req.channel.channel_id, "PUT", "/emoji-status", body, new TLRPC.TL_updates(), onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_setChatTheme) {
                 handleSetChatTheme((TLRPC.TL_messages_setChatTheme) request, onComplete);
                 return true;
@@ -4274,6 +4286,9 @@ public class RestBridge {
                     fields.put("caption", req.caption);
                 }
                 fields.put("pinned", req.pinned || req.period == Integer.MAX_VALUE);
+                if (req.media != null && req.media.video_timestamp > 0) {
+                    fields.put("coverTimestamp", req.media.video_timestamp); // the cover frame picked in the editor
+                }
                 TLRPC.Peer storyPeer;
                 if (req.peer != null && req.peer.channel_id != 0 && conversationIdByChatPeer.containsKey(req.peer.channel_id)) {
                     fields.put("conversationId", conversationIdByChatPeer.get(req.peer.channel_id));
@@ -4440,7 +4455,7 @@ public class RestBridge {
                     }
 
                     if (lastMessage != null) {
-                        TLRPC.TL_message tlMessage = buildTLMessage(lastMessage, dialog.peer);
+                        TLRPC.Message tlMessage = buildAnyMessage(lastMessage, dialog.peer); // service messages too
                         result.messages.add(tlMessage);
                         dialog.top_message = tlMessage.id;
                     }
@@ -5260,6 +5275,7 @@ public class RestBridge {
         // Blurred cover while the story loads + its real shape
         applyMediaInfo(item.media, story.optLong("fileSize", 0), story.optJSONObject("mediaMeta"));
         applyStrippedThumb(item.media, jsonStr(story, "thumb"));
+        applyCoverThumb(item.media, jsonStr(story, "coverUrl"), story.optJSONObject("mediaMeta"));
 
         String caption = story.optString("caption", null);
         if (caption != null && caption.length() > 0) {
@@ -5664,6 +5680,7 @@ public class RestBridge {
         j.put("second_background_color", st.second_background_color);
         j.put("third_background_color", st.third_background_color);
         j.put("fourth_background_color", st.fourth_background_color);
+        if (st.emoticon != null && !st.emoticon.isEmpty()) j.put("emoticon", st.emoticon); // a theme's wallpaper
         j.put("flags", st.flags);
         return j;
     }
@@ -5701,6 +5718,11 @@ public class RestBridge {
             st.second_background_color = settings.optInt("second_background_color", 0);
             st.third_background_color = settings.optInt("third_background_color", 0);
             st.fourth_background_color = settings.optInt("fourth_background_color", 0);
+            String emoticon = settings.optString("emoticon", "");
+            if (!emoticon.isEmpty()) {
+                st.emoticon = emoticon;
+                st.flags |= TLObject.FLAG_7;
+            }
         }
         return st;
     }
@@ -5766,6 +5788,35 @@ public class RestBridge {
             service.action = setWallpaper;
             return service;
         }
+        if ("system".equals(m.optString("type"))) {
+            // Every other system message is a centered service message, never a text
+            // "from" the user: joined / left like Telegram, anything else as a notice
+            TLRPC.TL_message base = buildTLMessage(m, peer);
+            TLRPC.TL_messageService service = new TLRPC.TL_messageService();
+            service.id = base.id;
+            service.date = base.date;
+            service.peer_id = base.peer_id;
+            service.dialog_id = base.dialog_id;
+            service.from_id = base.from_id;
+            service.out = base.out;
+            if (service.from_id != null) service.flags |= TLObject.FLAG_8;
+            String text = m.optString("text", "");
+            long senderTlId = base.from_id instanceof TLRPC.TL_peerUser ? base.from_id.user_id : 0;
+            if ("JOINED_GROUP".equals(text) && senderTlId != 0) {
+                TLRPC.TL_messageActionChatAddUser add = new TLRPC.TL_messageActionChatAddUser();
+                add.users.add(senderTlId);
+                service.action = add;
+            } else if ("LEFT_GROUP".equals(text) && senderTlId != 0) {
+                TLRPC.TL_messageActionChatDeleteUser left = new TLRPC.TL_messageActionChatDeleteUser();
+                left.user_id = senderTlId;
+                service.action = left;
+            } else {
+                TLRPC.TL_messageActionCustomAction custom = new TLRPC.TL_messageActionCustomAction();
+                custom.message = "VOICE_CALL_STARTED".equals(text) ? "🎙" : "VOICE_CALL_ENDED".equals(text) ? "🎙 ✖" : text;
+                service.action = custom;
+            }
+            return service;
+        }
         return buildTLMessage(m, peer);
     }
 
@@ -5829,7 +5880,8 @@ public class RestBridge {
                 // Plain color / gradient wallpapers have no file, only their colors
                 boolean noFile = !req.revert && path == null && req.settings != null
                         && (req.wallpaper == null || req.wallpaper instanceof TLRPC.TL_inputWallPaperNoFile)
-                        && (req.settings.background_color != 0 || req.settings.second_background_color != 0);
+                        && (req.settings.background_color != 0 || req.settings.second_background_color != 0
+                            || (req.settings.emoticon != null && !req.settings.emoticon.isEmpty()));
                 if (req.revert || (path == null && !noFile)) {
                     body.put("revert", true);
                 } else {
@@ -5931,7 +5983,7 @@ public class RestBridge {
         TL_stories.TL_premium_boostsStatus status = new TL_stories.TL_premium_boostsStatus();
         long chatId = req.peer != null ? (req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id) : 0;
         TLRPC.Chat chat = chatId != 0 ? org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(chatId) : null;
-        boolean unlocked = chat != null && chat.verified;
+        boolean unlocked = true; // no boosts on this server: colors, emoji status and wallpaper are open to admins
         status.level = unlocked ? 10 : 0;
         status.current_level_boosts = unlocked ? 100 : 0;
         status.boosts = unlocked ? 100 : 0;
@@ -9571,6 +9623,11 @@ public class RestBridge {
                     full.ttl_period = ttl;
                     full.flags |= TLObject.FLAG_24;
                 }
+                JSONObject groupWallpaper = conv.optJSONObject("chatWallpaper");
+                if (groupWallpaper != null && (jsonStr(groupWallpaper, "url") != null || groupWallpaper.optJSONObject("settings") != null)) {
+                    full.wallpaper = buildWallPaper(jsonStr(groupWallpaper, "url"), groupWallpaper.optJSONObject("settings"));
+                    full.flags2 |= TLObject.FLAG_7;
+                }
                 String groupTheme = jsonStr(conv, "chatTheme");
                 if (groupTheme != null && !groupTheme.isEmpty()) {
                     full.theme_emoticon = groupTheme;
@@ -9679,6 +9736,9 @@ public class RestBridge {
                 }
                 result.full_chat = full;
                 complete(onComplete, result, null);
+            } catch (RestException e) {
+                // banned / no access: CHANNEL_PRIVATE, so the app closes it like Telegram
+                complete(onComplete, null, tlError(e.statusCode == 403 ? 400 : e.statusCode, e.statusCode == 403 ? "CHANNEL_PRIVATE" : (e.message != null && e.message.matches("[A-Z_]+") ? e.message : "CHANNEL_INVALID")));
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -10300,6 +10360,7 @@ public class RestBridge {
             }
             applyMediaInfo(msg.media, m.optLong("fileSize", 0), m.optJSONObject("mediaMeta"));
             applyStrippedThumb(msg.media, jsonStr(m, "thumb"));
+            if ("video".equals(type)) applyCoverThumb(msg.media, jsonStr(m, "videoThumbnailUrl"), m.optJSONObject("mediaMeta"));
             if (m.optBoolean("hasSpoiler", false)) {
                 msg.media.spoiler = true;
             }
@@ -10538,6 +10599,10 @@ public class RestBridge {
                         && ("u".equals(req.location.thumb_size) || "v".equals(req.location.thumb_size))) {
                     url = videoUrlByPhotoId.get(id); // video avatar
                 }
+                if (url == null && req.location instanceof TLRPC.TL_inputDocumentFileLocation
+                        && req.location.thumb_size != null && !req.location.thumb_size.isEmpty()) {
+                    url = coverUrlByDocId.get(id); // a video's cover frame
+                }
                 if (url == null) {
                     url = mediaUrlById.get(id);
                 }
@@ -10645,6 +10710,29 @@ public class RestBridge {
             photo.flags |= TLObject.FLAG_1; // video_sizes present
         }
         return photo;
+    }
+
+    // A video's real cover frame (server-made, 720 px): shown in story rings, the
+    // stories grid and before the video plays. upload.getFile maps the document's
+    // "m" thumb to this image (see coverUrlByDocId).
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> coverUrlByDocId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void applyCoverThumb(TLRPC.MessageMedia media, String coverUrl, JSONObject meta) {
+        if (!(media instanceof TLRPC.TL_messageMediaDocument) || media.document == null || coverUrl == null || coverUrl.isEmpty()) return;
+        TLRPC.Document doc = media.document;
+        coverUrlByDocId.put(doc.id, absoluteUrl(coverUrl));
+        int w = meta != null ? meta.optInt("width", 0) : 0;
+        int h = meta != null ? meta.optInt("height", 0) : 0;
+        TLRPC.TL_photoSize size = new TLRPC.TL_photoSize();
+        size.type = "m";
+        size.w = 720;
+        size.h = w > 0 && h > 0 ? Math.round(720f * h / w) : 1280;
+        size.size = 0;
+        size.location = new TLRPC.TL_fileLocationToBeDeprecated();
+        size.location.volume_id = -doc.id;
+        size.location.local_id = 'm';
+        size.location.dc_id = 1;
+        doc.thumbs.add(size);
     }
 
     // Server-made Telegram "stripped" thumbnail (base64, ~40px JPEG body):
@@ -11319,6 +11407,19 @@ public class RestBridge {
             broadcastTlIds.add(channelTlId);
         }
         channel.verified = conv.optBoolean("isVerified", false);
+        JSONObject convStatus = conv.optJSONObject("emojiStatus");
+        String convStatusUrl = convStatus != null ? jsonStr(convStatus, "url") : null;
+        if (convStatusUrl != null && !convStatusUrl.isEmpty()) {
+            TLRPC.TL_emojiStatus st = new TLRPC.TL_emojiStatus();
+            st.document_id = idForUrl(absoluteUrl(convStatusUrl));
+            int until = convStatus.optInt("until", 0);
+            if (until > 0) {
+                st.until = until;
+                st.flags |= 1;
+            }
+            channel.emoji_status = st;
+            channel.flags2 |= TLObject.FLAG_9;
+        }
         channel.signatures = conv.optBoolean("showSignatures", false);
         channel.noforwards = conv.optBoolean("protectedContent", false);
         channel.join_request = conv.optBoolean("approveNewMembers", false);
