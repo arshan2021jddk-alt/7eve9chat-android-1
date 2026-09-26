@@ -559,6 +559,8 @@ public class SocketBridge {
             if (chats.isEmpty()) {
                 return;
             }
+            // someone else promoted / demoted an admin or changed a title: fresh tags
+            if (conv.has("owner") && conv.has("admins")) rest.refreshAdminCache(conv);
             Utilities.stageQueue.postRunnable(() -> {
                 MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
                 controller.putChats(chats, false);

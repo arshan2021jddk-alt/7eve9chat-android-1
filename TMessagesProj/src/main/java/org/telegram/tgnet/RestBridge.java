@@ -2534,12 +2534,45 @@ public class RestBridge {
     private TLRPC.TL_updates chatUpdates(String convId) {
         TLRPC.TL_updates updates = new TLRPC.TL_updates();
         try {
-            addConversationChat(fetchConversation(convId), updates.chats);
+            JSONObject conv = fetchConversation(convId);
+            addConversationChat(conv, updates.chats);
+            refreshAdminCache(conv);
         } catch (Exception e) {
             FileLog.e(e);
         }
         updates.date = (int) (System.currentTimeMillis() / 1000L);
         return updates;
+    }
+
+    // The app keeps the owner / admin tags (and custom titles) in a cache it reloads at
+    // most once a minute, and this server sends no "participant changed" updates - so
+    // after an admin change it's rebuilt here from the fresh chat, and its info reloaded.
+    void refreshAdminCache(JSONObject conv) {
+        try {
+            String convId = conv.optString("_id", "");
+            if (convId.length() != 24) return;
+            long chatId = idFromMongoId(convId);
+            int now = (int) (System.currentTimeMillis() / 1000L);
+            androidx.collection.LongSparseArray<TLRPC.ChannelParticipant> admins = new androidx.collection.LongSparseArray<>();
+            java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+            String owner = refId(conv, "owner");
+            if (owner != null) ids.add(owner);
+            JSONArray list = conv.optJSONArray("admins");
+            for (int i = 0; list != null && i < list.length(); i++) {
+                Object a = list.opt(i);
+                String id = a instanceof JSONObject ? ((JSONObject) a).optString("_id", "") : String.valueOf(a);
+                if (id.length() == 24) ids.add(id);
+            }
+            for (String id : ids) {
+                long tl = idFromMongoId(id);
+                admins.put(tl, participantFor(conv, id, tl, now));
+            }
+            org.telegram.messenger.MessagesController mc = org.telegram.messenger.MessagesController.getInstance(currentAccount);
+            mc.processLoadedChannelAdmins(admins, chatId, false);
+            org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> mc.loadFullChat(chatId, 0, true));
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     private void handleSimpleConversationCall(long chatTlId, String method, String suffix, JSONObject body, TLObject okResponse, RequestDelegate onComplete) {
@@ -2610,10 +2643,12 @@ public class RestBridge {
                 body.put("rights", adminRightsToJson(req.admin_rights));
                 body.put("rank", req.rank == null ? "" : req.rank);
                 request("PUT", "/conversations/" + convId + "/admin-rights", body, true);
-                // Fresh chat so our own rights / the admin list update right away.
+                // Fresh chat so our own rights / the admin list and tags update right away.
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 try {
-                    addConversationChat(fetchConversation(convId), updates.chats);
+                    JSONObject fresh = fetchConversation(convId);
+                    addConversationChat(fresh, updates.chats);
+                    refreshAdminCache(fresh);
                 } catch (Exception ignore) {
                 }
                 updates.date = (int) (System.currentTimeMillis() / 1000L);
@@ -8395,6 +8430,7 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("newOwnerId", newOwner);
                 JSONObject conv = request("PUT", "/conversations/" + convId + "/transfer-owner", body, true);
+                if (conv.has("_id")) refreshAdminCache(conv); else refreshAdminCache(fetchConversation(convId));
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 addConversationChat(conv, updates.chats);
                 updates.date = (int) (System.currentTimeMillis() / 1000L);
@@ -10121,14 +10157,26 @@ public class RestBridge {
                 }
 
                 int limit = Math.max(1, Math.min(req.limit, 100));
-                if (req.add_offset < 0 && req.offset_id != 0) {
-                    // "Newer than offset_id": the live socket already delivers
-                    // those, and older-only paging is what the backend offers.
-                    complete(onComplete, new TLRPC.TL_messages_messages(), null);
-                    return;
-                }
                 String path = "/messages/" + conversationId + "?page=1&limit=" + limit;
-                if (req.offset_id != 0) {
+                JSONArray newerPart = null;
+                if (req.add_offset < 0 && req.offset_id != 0) {
+                    // Around a message (opening a chat at the last read post, jumping to a
+                    // reply...): the message and -add_offset newer ones, plus older ones below
+                    String atMongoId = messageMongoIdByTlId.get(req.offset_id);
+                    if (atMongoId == null) {
+                        complete(onComplete, new TLRPC.TL_messages_messages(), null);
+                        return;
+                    }
+                    int newer = Math.min(-req.add_offset, limit);
+                    newerPart = requestArray("GET", "/messages/" + conversationId + "?from=" + atMongoId + "&limit=" + newer, null, true);
+                    int older = Math.max(0, limit - newerPart.length());
+                    if (older == 0) {
+                        path = null;
+                    } else {
+                        path = "/messages/" + conversationId + "?page=1&limit=" + older + "&before=" + atMongoId;
+                    }
+                }
+                if (req.offset_id != 0 && newerPart == null) {
                     String beforeMongoId = messageMongoIdByTlId.get(req.offset_id);
                     if (beforeMongoId == null) {
                         complete(onComplete, new TLRPC.TL_messages_messages(), null);
@@ -10138,7 +10186,11 @@ public class RestBridge {
                 }
                 JSONArray messages;
                 try {
-                    messages = requestArray("GET", path, null, true);
+                    messages = path != null ? requestArray("GET", path, null, true) : new JSONArray();
+                    if (newerPart != null) {
+                        // older (oldest first) + the message and newer ones (oldest first)
+                        for (int i = 0; i < newerPart.length(); i++) messages.put(newerPart.get(i));
+                    }
                 } catch (RestException e) {
                     // a stale id (the chat was deleted and started again): look it up once more
                     String fresh = (e.statusCode == 403 || e.statusCode == 404) && req.peer.user_id != 0 && req.offset_id == 0
