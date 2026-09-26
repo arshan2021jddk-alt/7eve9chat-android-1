@@ -278,7 +278,8 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             mapped = "/+" + path.substring(8);
         } else if ((path.startsWith("/gp/") || path.startsWith("/cl/") || path.startsWith("/pv/")) && path.length() > 4) {
             mapped = "/" + path.substring(4);
-        } else if (path.matches("^/[a-zA-Z][a-zA-Z0-9_]{3,31}/?$") && !path.startsWith("/admin") && !path.startsWith("/login")) {
+        } else if (path.matches("^/[a-zA-Z][a-zA-Z0-9_]{3,31}(/\\d+)?/?$") && !path.startsWith("/admin") && !path.startsWith("/login")) {
+            // /username and /username/123 (a post)
             mapped = path;
         } else {
             return null;

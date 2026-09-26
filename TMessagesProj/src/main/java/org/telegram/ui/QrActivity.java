@@ -560,8 +560,15 @@ public class QrActivity extends BaseFragment {
     }
 
     private void onDataLoaded(List<EmojiThemes> result) {
-        if (result == null || result.isEmpty() || themesViewController == null) {
+        if (themesViewController == null) {
             return;
+        }
+        if (result == null || result.isEmpty()) {
+            // 7eve9chat: no chat themes on this server - show the default one instead of loading forever
+            result = new ArrayList<>();
+            result.add(homeTheme);
+        } else {
+            result = new ArrayList<>(result);
         }
         result.set(0, homeTheme);
         List<ChatThemeBottomSheet.ChatThemeItem> items = new ArrayList<>(result.size());

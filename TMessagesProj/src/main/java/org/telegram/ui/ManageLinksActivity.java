@@ -834,7 +834,7 @@ public class ManageLinksActivity extends BaseFragment implements NotificationCen
                     linkActionView.setCanEdit(adminId == getAccountInstance().getUserConfig().clientUserId);
                     if (isPublic && adminId == getAccountInstance().getUserConfig().clientUserId) {
                         if (info != null) {
-                            linkActionView.setLink("https://t.me/" + ChatObject.getPublicUsername(currentChat));
+                            linkActionView.setLink("https://" + getMessagesController().linkPrefix + "/" + ChatObject.getPublicUsername(currentChat));
                             linkActionView.setUsers(0, null);
                             linkActionView.hideRevokeOption(true);
                         }

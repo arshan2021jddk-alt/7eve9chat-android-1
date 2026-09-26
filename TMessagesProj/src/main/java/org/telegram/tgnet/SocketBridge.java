@@ -70,6 +70,11 @@ public class SocketBridge {
         try {
             IO.Options options = new IO.Options();
             options.query = "userId=" + userId;
+            // the server identifies the socket by this JWT (the userId alone is no longer trusted)
+            String token = RestBridge.getInstance(currentAccount).getAuthToken();
+            if (token != null) {
+                options.auth = java.util.Collections.singletonMap("token", token);
+            }
             options.reconnection = true;
             options.forceNew = true;
             socket = IO.socket(SOCKET_URL, options);

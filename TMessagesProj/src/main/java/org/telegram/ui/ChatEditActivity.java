@@ -1643,7 +1643,7 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
 
             publicLinkCell.setTextAndValueAndIcon(getString(R.string.BotPublicLinks), LocaleController.formatString(R.string.BotPublicLinksCount, usernamesActive, currentUser.usernames.size()), R.drawable.msg_link2, true);
         } else {
-            publicLinkCell.setTextAndValueAndIcon(getString(R.string.BotPublicLink), "t.me/" + currentUser.username, R.drawable.msg_link2, true);
+            publicLinkCell.setTextAndValueAndIcon(getString(R.string.BotPublicLink), getMessagesController().linkPrefix + "/" + currentUser.username, R.drawable.msg_link2, true);
         }
     }
 

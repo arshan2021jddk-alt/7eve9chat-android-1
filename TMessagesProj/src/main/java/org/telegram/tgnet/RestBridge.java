@@ -704,6 +704,23 @@ public class RestBridge {
                 handleUpdatePinnedMessage((TLRPC.TL_messages_updatePinnedMessage) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_toggleTodoCompleted) {
+                TLRPC.TL_messages_toggleTodoCompleted t = (TLRPC.TL_messages_toggleTodoCompleted) request;
+                JSONObject body = new JSONObject();
+                body.put("completed", new JSONArray(t.completed));
+                body.put("incompleted", new JSONArray(t.incompleted));
+                handleTodoChange(t.peer, t.msg_id, "/todo/toggle", body, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_appendTodoList) {
+                TLRPC.TL_messages_appendTodoList t = (TLRPC.TL_messages_appendTodoList) request;
+                JSONArray items = new JSONArray();
+                for (TLRPC.TodoItem item : t.list) {
+                    items.put(new JSONObject().put("title", item.title != null && item.title.text != null ? item.title.text : ""));
+                }
+                handleTodoChange(t.peer, t.msg_id, "/todo/append", new JSONObject().put("items", items), onComplete);
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_sendVote) {
                 handleSendVote((TLRPC.TL_messages_sendVote) request, onComplete);
                 return true;
@@ -3851,7 +3868,7 @@ public class RestBridge {
             String kind = documentKindById.get(docId);
             if (kind == null) {
                 String lower = path.toLowerCase(Locale.US);
-                kind = lower.endsWith(".webp") || lower.endsWith(".tgs") ? "sticker" : lower.endsWith(".mp4") ? "gif" : "file";
+                kind = lower.endsWith(".webp") || lower.endsWith(".tgs") || lower.endsWith(".webm") ? "sticker" : lower.endsWith(".mp4") ? "gif" : "file";
             }
             JSONObject body = new JSONObject();
             if (!putSendTarget(body, peer)) {
@@ -3863,6 +3880,57 @@ public class RestBridge {
             if (caption != null && !caption.isEmpty()) {
                 body.put("text", caption);
             }
+            putReplyTo(body, replyTo);
+            JSONObject sent = request("POST", sendPath(), body, true);
+            rememberConversation(peer, sent);
+            return sent;
+        }
+        if (media instanceof TLRPC.TL_inputMediaPoll) {
+            TLRPC.Poll p = ((TLRPC.TL_inputMediaPoll) media).poll;
+            JSONObject body = new JSONObject();
+            if (p == null || !putSendTarget(body, peer)) {
+                throw new RestException(400, "MEDIA_INVALID");
+            }
+            JSONObject poll = new JSONObject();
+            poll.put("question", p.question != null && p.question.text != null ? p.question.text : "");
+            JSONArray options = new JSONArray();
+            for (int i = 0; i < p.answers.size(); i++) {
+                TLRPC.PollAnswer a = p.answers.get(i);
+                JSONObject o = new JSONObject();
+                o.put("id", String.valueOf(i));
+                o.put("text", a.text != null && a.text.text != null ? a.text.text : "");
+                options.put(o);
+            }
+            poll.put("options", options);
+            poll.put("multiSelect", p.multiple_choice);
+            poll.put("anonymous", !p.public_voters);
+            poll.put("allowChangeVote", !p.revoting_disabled);
+            long closeAt = p.close_date > 0 ? p.close_date * 1000L : p.close_period > 0 ? System.currentTimeMillis() + p.close_period * 1000L : 0;
+            if (closeAt > 0) poll.put("expiresAt", ISO_FORMAT.get().format(new java.util.Date(closeAt)));
+            body.put("type", "poll");
+            body.put("poll", poll);
+            putReplyTo(body, replyTo);
+            JSONObject sent = request("POST", sendPath(), body, true);
+            rememberConversation(peer, sent);
+            return sent;
+        }
+        if (media instanceof TLRPC.TL_inputMediaTodo) {
+            TLRPC.TodoList t = ((TLRPC.TL_inputMediaTodo) media).todo;
+            JSONObject body = new JSONObject();
+            if (t == null || !putSendTarget(body, peer)) {
+                throw new RestException(400, "MEDIA_INVALID");
+            }
+            JSONObject todo = new JSONObject();
+            todo.put("title", t.title != null && t.title.text != null ? t.title.text : "");
+            JSONArray items = new JSONArray();
+            for (TLRPC.TodoItem item : t.list) {
+                items.put(new JSONObject().put("title", item.title != null && item.title.text != null ? item.title.text : ""));
+            }
+            todo.put("items", items);
+            todo.put("othersCanAppend", t.others_can_append);
+            todo.put("othersCanComplete", t.others_can_complete);
+            body.put("type", "todo");
+            body.put("todo", todo);
             putReplyTo(body, replyTo);
             JSONObject sent = request("POST", sendPath(), body, true);
             rememberConversation(peer, sent);
@@ -3928,6 +3996,7 @@ public class RestBridge {
             boolean voice = false;
             boolean isVideo = false;
             boolean animated = false;
+            boolean sticker = false;
             for (TLRPC.DocumentAttribute attr : media.attributes) {
                 if (attr instanceof TLRPC.TL_documentAttributeFilename) {
                     fileName = attr.file_name;
@@ -3937,9 +4006,14 @@ public class RestBridge {
                     isVideo = true;
                 } else if (attr instanceof TLRPC.TL_documentAttributeAnimated) {
                     animated = true;
+                } else if (attr instanceof TLRPC.TL_documentAttributeSticker) {
+                    sticker = true;
                 }
             }
-            if (voice) {
+            if (sticker && !media.force_file && ("image/webp".equals(mime) || "video/webm".equals(mime) || "application/x-tgsticker".equals(mime))) {
+                // a sticker made in the app (photo -> webp, video/GIF -> webm)
+                type = "sticker";
+            } else if (voice) {
                 type = "voice";
             } else if (media.force_file) {
                 type = "file";
@@ -3989,6 +4063,7 @@ public class RestBridge {
                     if (attr.duration > 0) meta.put("duration", attr.duration);
                     if (attr.w > 0) meta.put("width", attr.w);
                     if (attr.h > 0) meta.put("height", attr.h);
+                    if (attr instanceof TLRPC.TL_documentAttributeVideo && attr.round_message) meta.put("round", true);
                 }
             }
             if (meta.length() > 0) {
@@ -5820,8 +5895,16 @@ public class RestBridge {
         executor.execute(() -> {
             try {
                 JSONObject body = new JSONObject();
+                String shortName = req.short_name;
+                if (shortName == null || shortName.trim().isEmpty()) {
+                    // the sticker maker leaves it empty - Telegram's server picks one, so do we
+                    String slug = (req.title == null ? "" : req.title).toLowerCase(Locale.US).replaceAll("[^a-z0-9]+", "_").replaceAll("^_+|_+$", "");
+                    if (slug.length() > 20) slug = slug.substring(0, 20);
+                    shortName = (slug.isEmpty() ? "pack" : slug) + "_" + Long.toString(Math.abs(Utilities.random.nextLong()), 36).substring(0, 6) + "_by_7eve9";
+                    req.short_name = shortName;
+                }
                 body.put("title", req.title);
-                body.put("shortName", req.short_name);
+                body.put("shortName", shortName);
                 body.put("isPublic", true);
                 JSONObject set = request("POST", "/stickers/sets", body, true);
                 String setMongoId = set.getString("_id");
@@ -8947,6 +9030,29 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // messages.sendVote -> POST /messages/:id/poll/vote {optionId}
     // ---------------------------------------------------------------
+    // Checklists: tick / untick items, add items -> POST /messages/:id/todo/{toggle,append}
+    private void handleTodoChange(TLRPC.InputPeer inputPeer, int msgId, String suffix, JSONObject body, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String mongoMessageId = messageMongoIdByTlId.get(msgId);
+                if (mongoMessageId == null) {
+                    complete(onComplete, null, tlError(400, "MESSAGE_ID_INVALID"));
+                    return;
+                }
+                JSONObject updated = request("POST", "/messages/" + mongoMessageId + suffix, body, true);
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(editUpdateFor(buildTLMessage(updated, peerFromInput(inputPeer))));
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            } catch (RestException e) {
+                complete(onComplete, null, restError(e.statusCode, e.message));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
     private void handleSendVote(TLRPC.TL_messages_sendVote req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
@@ -9791,7 +9897,24 @@ public class RestBridge {
         }
         msg.mentioned = mentionsMe(m, text, entities);
 
-        if ("poll".equals(type) && m.has("poll") && !m.isNull("poll")) {
+        if ("todo".equals(type) && m.optJSONObject("todo") != null) {
+            msg.media = buildTodoMedia(m.getJSONObject("todo"));
+            msg.flags |= TLObject.FLAG_9;
+        } else if (m.optJSONObject("contact") != null && !m.optJSONObject("contact").optString("phone", "").isEmpty()) {
+            // shared contact: a contact card (the text is only the website's fallback)
+            JSONObject c = m.getJSONObject("contact");
+            TLRPC.TL_messageMediaContact contact = new TLRPC.TL_messageMediaContact();
+            contact.phone_number = c.optString("phone", "");
+            contact.first_name = c.optString("firstName", "");
+            contact.last_name = c.optString("lastName", "");
+            contact.vcard = "";
+            String contactUser = jsonStr(c, "userId");
+            if (contactUser != null && contactUser.length() == 24) contact.user_id = idFromMongoId(contactUser);
+            msg.media = contact;
+            msg.flags |= TLObject.FLAG_9;
+            msg.message = "";
+            if (msg.entities != null) msg.entities.clear();
+        } else if ("poll".equals(type) && m.has("poll") && !m.isNull("poll")) {
             msg.media = buildPollMedia(m.getJSONObject("poll"), mongoMessageId);
             msg.flags |= TLObject.FLAG_9; // media present
         }
@@ -10229,6 +10352,15 @@ public class RestBridge {
                     if (meta.optDouble("duration", 0) > 0) attr.duration = meta.optDouble("duration", 0);
                     if (meta.optInt("width", 0) > 0) attr.w = meta.optInt("width", 0);
                     if (meta.optInt("height", 0) > 0) attr.h = meta.optInt("height", 0);
+                    if (meta.optBoolean("round", false)) {
+                        // video message (circle)
+                        attr.round_message = true;
+                        attr.flags |= TLObject.FLAG_0;
+                        if (media instanceof TLRPC.TL_messageMediaDocument) {
+                            media.round = true;
+                            media.flags |= TLObject.FLAG_7;
+                        }
+                    }
                 }
             }
         } else if (media.photo != null && !media.photo.sizes.isEmpty()) {
@@ -10476,6 +10608,42 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // JSON poll -> TLRPC.TL_messageMediaPoll
     // ---------------------------------------------------------------
+    // {title, items: [{id, title}], othersCanAppend, othersCanComplete, completions: [{id, by, date}]}
+    private TLRPC.TL_messageMediaToDo buildTodoMedia(JSONObject todo) {
+        TLRPC.TodoList list = new TLRPC.TodoList();
+        list.title = new TLRPC.TL_textWithEntities();
+        list.title.text = todo.optString("title", "");
+        list.others_can_append = todo.optBoolean("othersCanAppend", false);
+        list.others_can_complete = todo.optBoolean("othersCanComplete", false);
+        JSONArray items = todo.optJSONArray("items");
+        for (int i = 0; items != null && i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it == null) continue;
+            TLRPC.TodoItem item = new TLRPC.TodoItem();
+            item.id = it.optInt("id", i + 1);
+            item.title = new TLRPC.TL_textWithEntities();
+            item.title.text = it.optString("title", "");
+            list.list.add(item);
+        }
+        TLRPC.TL_messageMediaToDo media = new TLRPC.TL_messageMediaToDo();
+        media.todo = list;
+        JSONArray done = todo.optJSONArray("completions");
+        for (int i = 0; done != null && i < done.length(); i++) {
+            JSONObject c = done.optJSONObject(i);
+            if (c == null) continue;
+            TLRPC.TL_todoCompletion completion = new TLRPC.TL_todoCompletion();
+            completion.id = c.optInt("id", 0);
+            TLRPC.TL_peerUser by = new TLRPC.TL_peerUser();
+            String byId = c.optString("by", "");
+            by.user_id = byId.length() == 24 ? idFromMongoId(byId) : 0;
+            completion.completed_by = by;
+            completion.date = c.optInt("date", 0);
+            media.completions.add(completion);
+        }
+        if (!media.completions.isEmpty()) media.flags |= TLObject.FLAG_0;
+        return media;
+    }
+
     private TLRPC.TL_messageMediaPoll buildPollMedia(JSONObject poll, String mongoMessageId) throws Exception {
         TLRPC.TL_poll tlPoll = new TLRPC.TL_poll();
         tlPoll.id = idFromMongoId(mongoMessageId);
