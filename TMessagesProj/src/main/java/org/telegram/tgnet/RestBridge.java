@@ -1578,7 +1578,7 @@ public class RestBridge {
                 executor.execute(() -> {
                     try {
                         request("PUT", "/conversations/" + convId + "/ttl", body, true);
-                        complete(onComplete, new TLRPC.TL_updates(), null);
+                        complete(onComplete, chatUpdates(convId), null);
                     } catch (Exception e) {
                         FileLog.e(e);
                         complete(onComplete, null, genericError(e));
@@ -2517,6 +2517,19 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // Group/channel management (supergroup + channel methods)
     // ---------------------------------------------------------------
+    // After a group / channel setting changes: the updated chat, so Telegram's UI
+    // (switches, title, permissions...) shows the new state right away
+    private TLRPC.TL_updates chatUpdates(String convId) {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        try {
+            addConversationChat(fetchConversation(convId), updates.chats);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        return updates;
+    }
+
     private void handleSimpleConversationCall(long chatTlId, String method, String suffix, JSONObject body, TLObject okResponse, RequestDelegate onComplete) {
         handleSimpleConversationCall(chatTlId, method, suffix, body, okResponse, onComplete, "/conversations/");
     }
@@ -2530,7 +2543,7 @@ public class RestBridge {
                     return;
                 }
                 request(method, prefix + convId + suffix, body, true);
-                complete(onComplete, okResponse, null);
+                complete(onComplete, okResponse instanceof TLRPC.TL_updates && "/conversations/".equals(prefix) ? chatUpdates(convId) : okResponse, null);
             } catch (RestException e) {
                 complete(onComplete, null, restError(e.statusCode, e.message));
             } catch (Exception e) {
@@ -5898,7 +5911,7 @@ public class RestBridge {
                 if (backgroundEmojiId != 0) body.put("backgroundEmojiId", Long.toString(backgroundEmojiId));
                 if (conversationId != null) {
                     request("PUT", "/conversations/" + conversationId + "/appearance", body, true);
-                    complete(onComplete, new TLRPC.TL_updates(), null);
+                    complete(onComplete, chatUpdates(conversationId), null);
                 } else {
                     request("PUT", "/auth/appearance", body, true);
                     complete(onComplete, new TLRPC.TL_boolTrue(), null);
@@ -8597,7 +8610,7 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("name", req.title);
                 request("PUT", "/conversations/" + convId, body, true);
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -8668,11 +8681,17 @@ public class RestBridge {
                     complete(onComplete, null, restError(404, "Unknown channel"));
                     return;
                 }
-                request("POST", "/conversations/" + convId + "/join", new JSONObject(), true);
-
-                TLRPC.TL_chatInviteJoinResultOk result = new TLRPC.TL_chatInviteJoinResultOk();
-                result.updates = new TLRPC.TL_updates();
-                complete(onComplete, result, null);
+                JSONObject joined = request("POST", "/conversations/" + convId + "/join", new JSONObject(), true);
+                if (joined.optBoolean("pending", false)) {
+                    // the chat approves new members: a join request went to its admins
+                    complete(onComplete, null, tlError(400, "INVITE_REQUEST_SENT"));
+                    return;
+                }
+                // channels.joinChannel answers with Updates carrying the chat (now joined)
+                complete(onComplete, chatUpdates(convId), null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(e.statusCode == 403 ? 403 : 400,
+                        e.message != null && e.message.matches("[A-Z_]+") ? e.message : e.statusCode == 403 ? "CHANNEL_PRIVATE" : "CHANNEL_INVALID"));
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -8714,7 +8733,7 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("name", req.title);
                 request("PUT", "/conversations/" + convId, body, true);
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -9286,7 +9305,7 @@ public class RestBridge {
                     body.put("messageId", mongoMessageId);
                 }
                 request("PUT", "/conversations/" + convId + "/pin", body, true);
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -9392,6 +9411,9 @@ public class RestBridge {
                 invite.photo = new TLRPC.TL_photoEmpty();
                 invite.participants_count = info.optInt("participantsCount", 0);
                 invite.color = 0;
+                invite.request_needed = info.optBoolean("approveNewMembers", false); // "Request to join"
+                String about = jsonStr(info, "description");
+                if (about != null) invite.about = about;
                 if ("channel".equals(info.optString("type", "group"))) {
                     invite.channel = true;
                     invite.broadcast = true;
@@ -9412,6 +9434,10 @@ public class RestBridge {
             try {
                 String code = inviteCodeFromHash(req.hash);
                 JSONObject conv = request("POST", "/conversations/invite/" + code + "/join", new JSONObject(), true);
+                if (conv.optBoolean("pending", false)) {
+                    complete(onComplete, null, tlError(400, "INVITE_REQUEST_SENT"));
+                    return;
+                }
 
                 String convId = conv.getString("_id");
                 boolean isChannel = "channel".equals(conv.optString("type", "group"));
@@ -9538,6 +9564,17 @@ public class RestBridge {
                 if (slow > 0) {
                     full.slowmode_seconds = slow;
                     full.flags |= TLObject.FLAG_17;
+                }
+                // auto-delete timer and chat theme, saved on the server
+                int ttl = conv.optInt("ttlPeriod", 0);
+                if (ttl > 0) {
+                    full.ttl_period = ttl;
+                    full.flags |= TLObject.FLAG_24;
+                }
+                String groupTheme = jsonStr(conv, "chatTheme");
+                if (groupTheme != null && !groupTheme.isEmpty()) {
+                    full.theme_emoticon = groupTheme;
+                    full.flags |= TLObject.FLAG_27;
                 }
                 full.read_inbox_max_id = 0;
                 full.read_outbox_max_id = 0;
@@ -9779,7 +9816,7 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("slowModeInterval", req.seconds);
                 request("PUT", "/conversations/" + convId + "/slow-mode", body, true);
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -9803,7 +9840,7 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("defaultPermissions", defaultPermissions);
                 request("PUT", "/conversations/" + convId + "/permissions", body, true);
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
@@ -9865,7 +9902,7 @@ public class RestBridge {
                     body.put("restrictions", bannedRightsToPermissions(req.banned_rights));
                     request("POST", "/conversations/" + convId + "/restrict", body, true);
                 }
-                complete(onComplete, new TLRPC.TL_updates(), null);
+                complete(onComplete, chatUpdates(convId), null);
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
