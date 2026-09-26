@@ -481,21 +481,6 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback"
         />
-        <activity
-            android:name="org.telegram.ui.PrivateCallActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
-            android:screenOrientation="portrait"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:theme="@android:style/Theme.Material.NoActionBar" />
-        <activity
-            android:name="org.telegram.ui.GroupVoiceChatActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
-            android:screenOrientation="portrait"
-            android:theme="@android:style/Theme.Material.NoActionBar" />
         <service
             android:name=".NotificationsService"
             android:enabled="true"

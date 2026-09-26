@@ -94,11 +94,12 @@ public class SocketBridge {
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
         socket.on("gifts_changed", args -> onGiftsChanged(args));
-        socket.on("callUser", args -> {
-            if (args.length > 0 && args[0] instanceof JSONObject) {
-                org.telegram.ui.PrivateCallActivity.onIncomingCall(currentAccount, (JSONObject) args[0]);
-            }
-        });
+        // Calls (Telegram's own call screens; see RestBridge "Calls")
+        socket.on("phone_call", args -> onCallEvent(args, 0));
+        socket.on("phone_call_signaling", args -> onCallEvent(args, 1));
+        socket.on("group_call", args -> onCallEvent(args, 2));
+        socket.on("group_call_participants", args -> onCallEvent(args, 2));
+        socket.on("group_call_connection", args -> onCallEvent(args, 2));
         socket.on(Socket.EVENT_DISCONNECT, args ->
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
@@ -125,39 +126,6 @@ public class SocketBridge {
             if (s != null && s.connected()) {
                 s.emit("join_conversation", conversationId);
             }
-        }
-    }
-
-    // Generic access for features that run their own socket protocol
-    // (group voice chats).
-    public void on(String event, io.socket.emitter.Emitter.Listener listener) {
-        Socket s = socket;
-        if (s != null) {
-            s.on(event, listener);
-        }
-    }
-
-    public void off(String event, io.socket.emitter.Emitter.Listener listener) {
-        Socket s = socket;
-        if (s != null) {
-            s.off(event, listener);
-        }
-    }
-
-    public boolean isConnected() {
-        Socket s = socket;
-        return s != null && s.connected();
-    }
-
-    public String socketId() {
-        Socket s = socket;
-        return s != null ? s.id() : null;
-    }
-
-    public void emitAny(String event, Object data) {
-        Socket s = socket;
-        if (s != null && s.connected()) {
-            s.emit(event, data);
         }
     }
 
@@ -546,6 +514,31 @@ public class SocketBridge {
     }
 
     // A gift was given / removed / edited: refresh that profile's gift shelf live.
+    // kind: 0 = phone_call {call, users?}, 1 = phone_call_signaling {callId, data},
+    // 2 = group_call / group_call_participants / group_call_connection
+    private void onCallEvent(Object[] args, int kind) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject payload = (JSONObject) args[0];
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.TL_updates updates;
+            if (kind == 0) {
+                updates = rest.phoneCallUpdatesFromSocket(payload);
+            } else if (kind == 1) {
+                updates = rest.phoneCallSignalingFromSocket(payload);
+            } else {
+                updates = rest.groupCallUpdates(payload, null);
+            }
+            if (!updates.updates.isEmpty()) {
+                deliver(updates);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
     private void onGiftsChanged(Object... args) {
         try {
             if (args.length == 0 || !(args[0] instanceof JSONObject)) {

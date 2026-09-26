@@ -441,13 +441,6 @@ void initWebRTC(JNIEnv *env) {
 }
 
 extern "C"
-// 7eve9chat: sets up WebRTC's JNI/JVM globals so the plain org.webrtc
-// PeerConnection API can be used (group voice chats), without creating a
-// tgcalls instance first.
-JNIEXPORT void JNICALL Java_org_telegram_messenger_voip_NativeInstance_initPeerConnectionSupport(JNIEnv *env, jclass clazz) {
-    initWebRTC(env);
-}
-
 JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeGroupNativeInstance(JNIEnv *env, jclass clazz, jobject instanceObj, jstring logFilePath, jboolean highQuality, jlong videoCapturer, jboolean screencast, jboolean noiseSupression, jboolean conference) {
     initWebRTC(env);
 

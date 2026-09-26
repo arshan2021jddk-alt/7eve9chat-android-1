@@ -74,13 +74,6 @@ public class VoIPHelper {
 	private static final int VOIP_SUPPORT_ID = 4244000;
 
 	public static void startCall(TLRPC.User user, boolean videoCall, boolean canVideoCall, final Activity activity, TLRPC.UserFull userFull, AccountInstance accountInstance) {
-		// 7eve9chat: calls go through our own WebRTC call (compatible with the website)
-		if (activity != null && user != null) {
-			org.telegram.ui.PrivateCallActivity.startOutgoing(activity, accountInstance.getCurrentAccount(), user, videoCall);
-		}
-		if (true) {
-			return;
-		}
 		if (accountInstance == null ? MessagesController.getInstance(UserConfig.selectedAccount).isFrozen() : accountInstance.getMessagesController().isFrozen()) {
 			AccountFrozenAlert.show(accountInstance == null ? UserConfig.selectedAccount : accountInstance.getCurrentAccount());
 			return;
@@ -134,12 +127,6 @@ public class VoIPHelper {
 
 	public static void startCall(TLRPC.Chat chat, TLRPC.InputPeer peer, String hash, boolean createCall, Boolean checkJoiner, Activity activity, BaseFragment fragment, AccountInstance accountInstance) {
 		if (activity == null) {
-			return;
-		}
-		// 7eve9chat: voice chats run on our own WebRTC mesh (compatible with
-		// the website), not Telegram's group-call servers.
-		org.telegram.ui.GroupVoiceChatActivity.open(activity, accountInstance.getCurrentAccount(), chat);
-		if (true) {
 			return;
 		}
 		if (ConnectionsManager.getInstance(UserConfig.selectedAccount).getConnectionState() != ConnectionsManager.ConnectionStateConnected) {
@@ -834,8 +821,6 @@ public class VoIPHelper {
 		if (fragment == null || fragment.getParentActivity() == null) {
 			return;
 		}
-		// 7eve9chat: voice chats run on our own WebRTC mesh; "join as" (phone.getGroupCallJoinAs)
-		// doesn't exist there, and waiting for it meant the button did nothing.
-		startCall(currentChat, peer, null, true, fragment.getParentActivity(), fragment, accountInstance);
+		JoinCallAlert.checkFewUsers(fragment.getParentActivity(), -currentChat.id, accountInstance, param -> startCall(currentChat, peer, null, true, fragment.getParentActivity(), fragment, accountInstance));
     }
 }

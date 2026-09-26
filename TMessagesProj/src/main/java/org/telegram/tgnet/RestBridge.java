@@ -12,6 +12,7 @@ import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_bots;
 import org.telegram.tgnet.tl.TL_keyboard;
+import org.telegram.tgnet.tl.TL_phone;
 import org.telegram.tgnet.tl.TL_stars;
 import org.telegram.tgnet.tl.TL_stories;
 import org.telegram.tgnet.tl.TL_update;
@@ -409,19 +410,6 @@ public class RestBridge {
         return userMongoIdByTlId.get(userTlId);
     }
 
-    public String getConversationIdForChat(long chatTlId) {
-        return conversationIdByChatPeer.get(chatTlId);
-    }
-
-    public JSONArray fetchIceServers() {
-        try {
-            return requestArray("GET", "/webrtc/ice-servers", null, true);
-        } catch (Exception e) {
-            FileLog.e(e);
-            return new JSONArray();
-        }
-    }
-
     void joinConversationRoom(String conversationId) {
         SocketBridge.getInstance(currentAccount).joinConversation(conversationId);
     }
@@ -591,6 +579,9 @@ public class RestBridge {
         normalizeSelfPeers(request);
         try {
             if (handleSettingsRequest(request, onComplete)) {
+                return true;
+            }
+            if (handleCallRequest(request, onComplete)) {
                 return true;
             }
             if (request instanceof TLRPC.TL_auth_sendCode) {
@@ -4677,7 +4668,7 @@ public class RestBridge {
                 full.common_chats_count = 0;
                 full.display_gifts_button = false;
                 full.stories_pinned_available = true;
-                // Voice/video calls run on our own WebRTC calls (PrivateCallActivity)
+                // Voice/video calls: Telegram's own call screens (see "Calls")
                 full.phone_calls_available = !self && !user.bot;
                 full.video_calls_available = !self && !user.bot;
                 // Their privacy for me: calls and voice messages
@@ -5932,6 +5923,980 @@ public class RestBridge {
             }
             complete(onComplete, result, null);
         });
+    }
+
+    // ---------------------------------------------------------------
+    // Calls: Telegram's own call screens - VoIPService / VoIPFragment for
+    // 1:1 voice and video calls, GroupCallActivity for group and channel
+    // voice chats - with the phone.* API mapped onto REST (/calls,
+    // /group-calls) and socket events (SocketBridge). The server only
+    // relays: the DH key exchange, encryption and media stay between the
+    // apps (tgcalls / WebRTC), as with Telegram. Contract for the backend:
+    // redo-of-healer/docs/calls-api.md.
+    // ---------------------------------------------------------------
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> callMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> groupCallMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+    // tgcalls signaling must arrive in order: one sender thread
+    private final java.util.concurrent.ExecutorService signalingQueue = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    // Telegram's standard 2048-bit safe prime with g = 3 (the same one the native
+    // layer accepts in isGoodPrime); calls do their DH exchange with it.
+    private static final String DH_PRIME_HEX =
+            "c71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f48198a0aa7c14058229493d22530f4dbfa336f6e0ac925139543aed44cce7c3720fd51f6"
+            + "9458705ac68cd4fe6b6b13abdc9746512969328454f18faf8c595f642477fe96bb2a941d5bcd1d4ac8cc49880708fa9b378e3c4f3a9060bee67cf9a4a4a695811051907e"
+            + "162753b56b0f6b410dba74d8a84b2a14b3144e0ef1284754fd17ed950d5965b4b9dd46582db1178d169c6bc465b0d6ff9ca3928fef5b9ae4e418fc15e83ebea0f87fa9ff5"
+            + "eed70050ded2849f47bf959d956850ce929851f0d8115f635b105ee2e4e15d04b2454bf6f4fadf034b10403119cd8e3b92fcc5b";
+
+    private boolean handleCallRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TLRPC.TL_messages_getDhConfig) {
+            TLRPC.TL_messages_getDhConfig req = (TLRPC.TL_messages_getDhConfig) request;
+            TLRPC.TL_messages_dhConfig res = new TLRPC.TL_messages_dhConfig();
+            res.g = 3;
+            res.p = hexBytes(DH_PRIME_HEX);
+            res.version = 1;
+            res.random = new byte[Math.max(0, req.random_length)];
+            Utilities.random.nextBytes(res.random);
+            complete(onComplete, res, null);
+            return true;
+        }
+        if (request instanceof TL_phone.getCallConfig) {
+            executor.execute(() -> {
+                TLRPC.TL_dataJSON res = new TLRPC.TL_dataJSON();
+                try {
+                    res.data = request("GET", "/calls/config", null, true).toString();
+                } catch (Exception e) {
+                    res.data = "{}";
+                }
+                complete(onComplete, res, null);
+            });
+            return true;
+        }
+        if (request instanceof TL_phone.requestCall) {
+            TL_phone.requestCall req = (TL_phone.requestCall) request;
+            executor.execute(() -> {
+                try {
+                    String userMongoId = req.user_id != null ? userMongoIdByTlId.get(req.user_id.user_id) : null;
+                    if (userMongoId == null) {
+                        complete(onComplete, null, tlError(400, "USER_ID_INVALID"));
+                        return;
+                    }
+                    JSONObject body = new JSONObject();
+                    body.put("userId", userMongoId);
+                    body.put("randomId", req.random_id);
+                    body.put("gAHash", b64(req.g_a_hash));
+                    body.put("video", req.video);
+                    body.put("protocol", callProtocolToJson(req.protocol));
+                    completePhoneCall(onComplete, request("POST", "/calls", body, true));
+                } catch (Exception e) {
+                    completeCallError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_phone.receivedCall) {
+            callPost(((TL_phone.receivedCall) request).peer, "/received", new JSONObject(), onComplete, 0);
+            return true;
+        }
+        if (request instanceof TL_phone.acceptCall) {
+            TL_phone.acceptCall req = (TL_phone.acceptCall) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("gB", b64(req.g_b));
+                body.put("protocol", callProtocolToJson(req.protocol));
+            } catch (Exception ignore) {
+            }
+            callPost(req.peer, "/accept", body, onComplete, 1);
+            return true;
+        }
+        if (request instanceof TL_phone.confirmCall) {
+            TL_phone.confirmCall req = (TL_phone.confirmCall) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("gA", b64(req.g_a));
+                body.put("keyFingerprint", Long.toString(req.key_fingerprint));
+                body.put("protocol", callProtocolToJson(req.protocol));
+            } catch (Exception ignore) {
+            }
+            callPost(req.peer, "/confirm", body, onComplete, 1);
+            return true;
+        }
+        if (request instanceof TL_phone.discardCall) {
+            TL_phone.discardCall req = (TL_phone.discardCall) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("reason", discardReasonName(req.reason));
+                body.put("duration", req.duration);
+                body.put("video", req.video);
+                body.put("connectionId", Long.toString(req.connection_id));
+            } catch (Exception ignore) {
+            }
+            callPost(req.peer, "/discard", body, onComplete, 2);
+            return true;
+        }
+        if (request instanceof TL_phone.setCallRating) {
+            TL_phone.setCallRating req = (TL_phone.setCallRating) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("rating", req.rating);
+                body.put("comment", req.comment == null ? "" : req.comment);
+            } catch (Exception ignore) {
+            }
+            callPost(req.peer, "/rating", body, onComplete, 2);
+            return true;
+        }
+        if (request instanceof TL_phone.saveCallDebug || request instanceof TL_phone.saveCallLog) {
+            complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            return true;
+        }
+        if (request instanceof TL_phone.sendSignalingData) {
+            TL_phone.sendSignalingData req = (TL_phone.sendSignalingData) request;
+            signalingQueue.execute(() -> {
+                try {
+                    String callId = req.peer != null ? callMongoIdByTlId.get(req.peer.id) : null;
+                    if (callId == null) {
+                        complete(onComplete, null, tlError(400, "CALL_PEER_INVALID"));
+                        return;
+                    }
+                    JSONObject body = new JSONObject();
+                    body.put("data", b64(req.data));
+                    request("POST", "/calls/" + callId + "/signaling", body, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (Exception e) {
+                    completeCallError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        return handleGroupCallRequest(request, onComplete);
+    }
+
+    // kind: 0 = Bool, 1 = phone.PhoneCall, 2 = Updates
+    private void callPost(TLRPC.TL_inputPhoneCall peer, String suffix, JSONObject body, RequestDelegate onComplete, int kind) {
+        executor.execute(() -> {
+            try {
+                String callId = peer != null ? callMongoIdByTlId.get(peer.id) : null;
+                if (callId == null) {
+                    complete(onComplete, null, tlError(400, "CALL_PEER_INVALID"));
+                    return;
+                }
+                JSONObject resp = request("POST", "/calls/" + callId + suffix, body, true);
+                if (kind == 1) {
+                    completePhoneCall(onComplete, resp);
+                } else if (kind == 2) {
+                    complete(onComplete, callUpdates(resp), null);
+                } else {
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                }
+            } catch (Exception e) {
+                if (kind == 2) {
+                    // hanging up / rating must never get stuck on the server's answer
+                    complete(onComplete, new TLRPC.TL_updates(), null);
+                } else {
+                    completeCallError(onComplete, e);
+                }
+            }
+        });
+    }
+
+    private void completePhoneCall(RequestDelegate onComplete, JSONObject resp) throws Exception {
+        JSONObject call = resp.optJSONObject("call") != null ? resp.getJSONObject("call") : resp;
+        TL_phone.TL_phone_phoneCall res = new TL_phone.TL_phone_phoneCall();
+        res.phone_call = buildPhoneCall(call);
+        collectCallUsers(resp, call, res.users);
+        complete(onComplete, res, null);
+    }
+
+    private TLRPC.TL_updates callUpdates(JSONObject resp) throws Exception {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        JSONObject call = resp == null ? null : resp.optJSONObject("call") != null ? resp.getJSONObject("call") : (resp.has("state") ? resp : null);
+        if (call != null) {
+            TL_update.TL_updatePhoneCall u = new TL_update.TL_updatePhoneCall();
+            u.phone_call = buildPhoneCall(call);
+            updates.updates.add(u);
+            collectCallUsers(resp, call, updates.users);
+        }
+        return updates;
+    }
+
+    // Socket "phone_call" {call, users?} -> updatePhoneCall
+    public TLRPC.TL_updates phoneCallUpdatesFromSocket(JSONObject payload) throws Exception {
+        return callUpdates(payload);
+    }
+
+    // Socket "phone_call_signaling" {callId, data}
+    public TLRPC.TL_updates phoneCallSignalingFromSocket(JSONObject payload) {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        String callId = payload.optString("callId", "");
+        if (callId.isEmpty()) return updates;
+        TL_update.TL_updatePhoneCallSignalingData u = new TL_update.TL_updatePhoneCallSignalingData();
+        u.phone_call_id = idFromMongoId(callId);
+        callMongoIdByTlId.put(u.phone_call_id, callId);
+        u.data = unb64(payload.optString("data", ""));
+        updates.updates.add(u);
+        return updates;
+    }
+
+    private void completeCallError(RequestDelegate onComplete, Exception e) {
+        if (e instanceof RestException) {
+            RestException re = (RestException) e;
+            String code;
+            if (re.message != null && re.message.matches("[A-Z0-9_]{3,}")) {
+                code = re.message;
+            } else if (re.statusCode == 403) {
+                code = "USER_PRIVACY_RESTRICTED";
+            } else if (re.statusCode == 404) {
+                code = "CALL_NOT_AVAILABLE";
+            } else {
+                code = "CALL_FAILED";
+            }
+            complete(onComplete, null, tlError(re.statusCode, code));
+        } else {
+            complete(onComplete, null, genericError(e));
+        }
+    }
+
+    private void collectCallUsers(JSONObject resp, JSONObject call, ArrayList<TLRPC.User> out) {
+        java.util.HashSet<Long> added = new java.util.HashSet<>();
+        JSONArray users = resp != null ? resp.optJSONArray("users") : null;
+        if (users != null) {
+            for (int i = 0; i < users.length(); i++) {
+                addCallUser(users.optJSONObject(i), out, added);
+            }
+        }
+        for (String key : new String[]{"admin", "adminId", "participant", "participantId"}) {
+            addCallUser(call.optJSONObject(key), out, added);
+        }
+    }
+
+    private void addCallUser(JSONObject u, ArrayList<TLRPC.User> out, java.util.Set<Long> added) {
+        if (u == null || !u.has("_id")) return;
+        try {
+            boolean self = u.optString("_id").equals(selfMongoId);
+            TLRPC.TL_user user = buildTLUser(u, self);
+            if (added.add(user.id)) out.add(user);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private long callUserTlId(JSONObject call, String key) {
+        Object v = call.opt(key);
+        if (v instanceof JSONObject) v = ((JSONObject) v).optString("_id", "");
+        if (v == null || JSONObject.NULL.equals(v)) v = call.optString(key + "Id", "");
+        String id = String.valueOf(v);
+        return id.isEmpty() ? 0 : idFromMongoId(id);
+    }
+
+    private static int callTime(JSONObject o, String key) {
+        Object v = o.opt(key);
+        if (v instanceof Number) return ((Number) v).intValue();
+        if (v instanceof String && !((String) v).isEmpty()) {
+            String s = (String) v;
+            if (s.matches("\\d+")) return Integer.parseInt(s);
+            return parseIsoToEpochSeconds(s);
+        }
+        return 0;
+    }
+
+    private TL_phone.PhoneCall buildPhoneCall(JSONObject c) throws Exception {
+        String mongoId = c.optString("_id", c.optString("id", ""));
+        long id = idFromMongoId(mongoId);
+        callMongoIdByTlId.put(id, mongoId);
+        long accessHash = id ^ 0x7e9c4a11L;
+        try {
+            if (c.has("accessHash")) accessHash = Long.parseLong(c.getString("accessHash"));
+        } catch (Exception ignore) {
+        }
+        int date = callTime(c, "date");
+        if (date == 0) date = (int) (System.currentTimeMillis() / 1000L);
+        long adminId = callUserTlId(c, "admin");
+        long participantId = callUserTlId(c, "participant");
+        boolean video = c.optBoolean("video", false);
+        TL_phone.PhoneCall call;
+        switch (c.optString("state", "discarded")) {
+            case "requested": {
+                TL_phone.phoneCallRequested r = new TL_phone.phoneCallRequested();
+                r.g_a_hash = unb64(c.optString("gAHash", ""));
+                r.protocol = callProtocolFromJson(c.optJSONObject("protocol"));
+                call = r;
+                break;
+            }
+            case "waiting": {
+                TL_phone.TL_phoneCallWaiting w = new TL_phone.TL_phoneCallWaiting();
+                w.protocol = callProtocolFromJson(c.optJSONObject("protocol"));
+                w.receive_date = callTime(c, "receiveDate");
+                if (w.receive_date != 0) w.flags |= TLObject.FLAG_0;
+                call = w;
+                break;
+            }
+            case "accepted": {
+                TL_phone.TL_phoneCallAccepted a = new TL_phone.TL_phoneCallAccepted();
+                a.g_b = unb64(c.optString("gB", ""));
+                a.protocol = callProtocolFromJson(c.optJSONObject("protocol"));
+                call = a;
+                break;
+            }
+            case "active": {
+                TL_phone.TL_phoneCall p = new TL_phone.TL_phoneCall();
+                p.g_a_or_b = unb64(c.optString("gAOrB", ""));
+                try {
+                    p.key_fingerprint = Long.parseLong(c.optString("keyFingerprint", "0"));
+                } catch (Exception ignore) {
+                }
+                p.protocol = callProtocolFromJson(c.optJSONObject("protocol"));
+                p.connections = callConnections(c.optJSONArray("connections"));
+                p.start_date = callTime(c, "startDate");
+                if (p.start_date == 0) p.start_date = (int) (System.currentTimeMillis() / 1000L);
+                p.p2p_allowed = c.optBoolean("p2pAllowed", true);
+                call = p;
+                break;
+            }
+            default: {
+                TL_phone.TL_phoneCallDiscarded d = new TL_phone.TL_phoneCallDiscarded();
+                d.reason = discardReason(c.optString("reason", "hangup"));
+                d.flags |= 1;
+                d.duration = c.optInt("duration", 0);
+                if (d.duration > 0) d.flags |= 2;
+                d.need_rating = c.optBoolean("needRating", false);
+                d.need_debug = false;
+                call = d;
+                break;
+            }
+        }
+        call.id = id;
+        call.access_hash = accessHash;
+        call.date = date;
+        call.admin_id = adminId;
+        call.participant_id = participantId;
+        call.video = video;
+        return call;
+    }
+
+    private static JSONObject callProtocolToJson(TL_phone.PhoneCallProtocol p) throws Exception {
+        JSONObject o = new JSONObject();
+        if (p == null) return o;
+        o.put("udpP2p", p.udp_p2p);
+        o.put("udpReflector", p.udp_reflector);
+        o.put("minLayer", p.min_layer);
+        o.put("maxLayer", p.max_layer);
+        JSONArray versions = new JSONArray();
+        if (p.library_versions != null) {
+            for (String v : p.library_versions) versions.put(v);
+        }
+        o.put("libraryVersions", versions);
+        return o;
+    }
+
+    private static TL_phone.TL_phoneCallProtocol callProtocolFromJson(JSONObject o) {
+        TL_phone.TL_phoneCallProtocol p = new TL_phone.TL_phoneCallProtocol();
+        if (o == null) o = new JSONObject();
+        p.udp_p2p = o.optBoolean("udpP2p", true);
+        p.udp_reflector = o.optBoolean("udpReflector", true);
+        p.min_layer = o.optInt("minLayer", 65);
+        p.max_layer = o.optInt("maxLayer", 92);
+        JSONArray versions = o.optJSONArray("libraryVersions");
+        if (versions != null) {
+            for (int i = 0; i < versions.length(); i++) p.library_versions.add(versions.optString(i));
+        }
+        if (p.library_versions.isEmpty()) {
+            p.library_versions.addAll(java.util.Arrays.asList(org.telegram.messenger.voip.NativeInstance.getAllVersions()));
+        }
+        return p;
+    }
+
+    // Relay (TURN) / STUN servers for the call. Falls back to the site's
+    // /webrtc/ice-servers list when the call carries none.
+    private ArrayList<TLRPC.PhoneConnection> callConnections(JSONArray list) {
+        ArrayList<TLRPC.PhoneConnection> out = new ArrayList<>();
+        if (list == null || list.length() == 0) {
+            try {
+                list = iceServersAsConnections(requestArray("GET", "/webrtc/ice-servers", null, true));
+            } catch (Exception e) {
+                FileLog.e(e);
+                list = new JSONArray();
+            }
+        }
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject o = list.optJSONObject(i);
+            if (o == null) continue;
+            if ("reflector".equals(o.optString("type"))) {
+                TLRPC.TL_phoneConnection r = new TLRPC.TL_phoneConnection();
+                r.id = o.optLong("id", i + 1);
+                r.ip = o.optString("ip", "");
+                r.ipv6 = o.optString("ipv6", "");
+                r.port = o.optInt("port", 0);
+                r.peer_tag = unb64(o.optString("peerTag", ""));
+                r.tcp = o.optBoolean("tcp", false);
+                out.add(r);
+            } else {
+                TLRPC.TL_phoneConnectionWebrtc w = new TLRPC.TL_phoneConnectionWebrtc();
+                w.id = o.optLong("id", i + 1);
+                w.ip = o.optString("ip", "");
+                w.ipv6 = o.optString("ipv6", "");
+                w.port = o.optInt("port", 0);
+                w.turn = o.optBoolean("turn", false);
+                w.stun = o.optBoolean("stun", !w.turn);
+                w.username = o.optString("username", "");
+                w.password = o.optString("password", "");
+                out.add(w);
+            }
+        }
+        return out;
+    }
+
+    // [{urls: "turn:host:port?transport=udp", username, credential}] -> connection JSON
+    private static JSONArray iceServersAsConnections(JSONArray servers) throws Exception {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < servers.length(); i++) {
+            JSONObject s = servers.optJSONObject(i);
+            if (s == null) continue;
+            Object urls = s.opt("urls");
+            JSONArray list = urls instanceof JSONArray ? (JSONArray) urls : new JSONArray().put(String.valueOf(urls));
+            for (int j = 0; j < list.length(); j++) {
+                String url = list.optString(j, "");
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(stun|turn)s?:([^:?]+)(?::(\\d+))?").matcher(url);
+                if (!m.find()) continue;
+                if (url.contains("transport=tcp")) continue; // tgcalls relays over UDP
+                boolean turn = "turn".equals(m.group(1));
+                JSONObject c = new JSONObject();
+                c.put("id", out.length() + 1);
+                c.put("ip", m.group(2));
+                c.put("port", m.group(3) != null ? Integer.parseInt(m.group(3)) : 3478);
+                c.put("turn", turn);
+                c.put("stun", !turn);
+                c.put("username", s.optString("username", ""));
+                c.put("password", s.optString("credential", ""));
+                out.put(c);
+            }
+        }
+        return out;
+    }
+
+    private static String discardReasonName(TLRPC.PhoneCallDiscardReason r) {
+        if (r instanceof TLRPC.TL_phoneCallDiscardReasonMissed) return "missed";
+        if (r instanceof TLRPC.TL_phoneCallDiscardReasonBusy) return "busy";
+        if (r instanceof TLRPC.TL_phoneCallDiscardReasonDisconnect) return "disconnect";
+        return "hangup";
+    }
+
+    private static TLRPC.PhoneCallDiscardReason discardReason(String name) {
+        switch (name) {
+            case "missed":
+                return new TLRPC.TL_phoneCallDiscardReasonMissed();
+            case "busy":
+                return new TLRPC.TL_phoneCallDiscardReasonBusy();
+            case "disconnect":
+                return new TLRPC.TL_phoneCallDiscardReasonDisconnect();
+            default:
+                return new TLRPC.TL_phoneCallDiscardReasonHangup();
+        }
+    }
+
+    private static String b64(byte[] bytes) {
+        return bytes == null ? "" : android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+    }
+
+    private static byte[] unb64(String s) {
+        if (s == null || s.isEmpty()) return new byte[0];
+        try {
+            return android.util.Base64.decode(s, android.util.Base64.DEFAULT);
+        } catch (Exception e) {
+            return new byte[0];
+        }
+    }
+
+    private static byte[] hexBytes(String hex) {
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
+    }
+
+    // ---------------------------------------------------------------
+    // Group / channel voice chats (GroupCallActivity). One call per
+    // conversation; tgcalls' join payload goes to the server's SFU and its
+    // answer comes back as updateGroupCallConnection.
+    // ---------------------------------------------------------------
+    private boolean handleGroupCallRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TL_phone.getGroupCallJoinAs) {
+            // join as yourself only
+            TL_phone.joinAsPeers res = new TL_phone.joinAsPeers();
+            TLRPC.User me = UserConfig.getInstance(currentAccount).getCurrentUser();
+            if (me != null) {
+                TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                peer.user_id = me.id;
+                res.peers.add(peer);
+                res.users.add(me);
+            }
+            complete(onComplete, res, null);
+            return true;
+        }
+        if (request instanceof TL_phone.saveDefaultGroupCallJoinAs) {
+            complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            return true;
+        }
+        if (request instanceof TL_phone.getGroupCallStreamChannels || request instanceof TL_phone.getGroupCallStreamRtmpUrl) {
+            complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+            return true;
+        }
+        if (request instanceof TL_phone.exportGroupCallInvite) {
+            TL_phone.exportGroupCallInvite req = (TL_phone.exportGroupCallInvite) request;
+            TL_phone.exportedGroupCallInvite res = new TL_phone.exportedGroupCallInvite();
+            String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
+            res.link = "https://7eve9craft.ir/voicechat/" + (callId != null ? callId : "");
+            complete(onComplete, res, null);
+            return true;
+        }
+        if (request instanceof TL_phone.createGroupCall) {
+            TL_phone.createGroupCall req = (TL_phone.createGroupCall) request;
+            executor.execute(() -> {
+                try {
+                    long chatTlId = req.peer != null ? (req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id) : 0;
+                    String convId = conversationIdByChatPeer.get(chatTlId);
+                    if (convId == null) {
+                        complete(onComplete, null, tlError(400, "PEER_ID_INVALID"));
+                        return;
+                    }
+                    JSONObject body = new JSONObject();
+                    body.put("conversationId", convId);
+                    body.put("randomId", req.random_id);
+                    if (req.title != null) body.put("title", req.title);
+                    if (req.schedule_date != 0) body.put("scheduleDate", req.schedule_date);
+                    complete(onComplete, groupCallUpdates(request("POST", "/group-calls", body, true), convId), null);
+                } catch (Exception e) {
+                    completeCallError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_phone.joinGroupCall) {
+            TL_phone.joinGroupCall req = (TL_phone.joinGroupCall) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("params", req.params != null ? req.params.data : "");
+                body.put("muted", req.muted);
+                body.put("videoStopped", req.video_stopped);
+                if (req.invite_hash != null) body.put("inviteHash", req.invite_hash);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "POST", "/join", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.leaveGroupCall) {
+            TL_phone.leaveGroupCall req = (TL_phone.leaveGroupCall) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("source", req.source);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "POST", "/leave", body, onComplete, false);
+            return true;
+        }
+        if (request instanceof TL_phone.discardGroupCall) {
+            groupCallPost(((TL_phone.discardGroupCall) request).call, "POST", "/discard", new JSONObject(), onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.startScheduledGroupCall) {
+            groupCallPost(((TL_phone.startScheduledGroupCall) request).call, "POST", "/start", new JSONObject(), onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.toggleGroupCallStartSubscription) {
+            TL_phone.toggleGroupCallStartSubscription req = (TL_phone.toggleGroupCallStartSubscription) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("subscribed", req.subscribed);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "POST", "/subscribe", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.editGroupCallTitle) {
+            TL_phone.editGroupCallTitle req = (TL_phone.editGroupCallTitle) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("title", req.title == null ? "" : req.title);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "PATCH", "", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.toggleGroupCallSettings) {
+            TL_phone.toggleGroupCallSettings req = (TL_phone.toggleGroupCallSettings) request;
+            JSONObject body = new JSONObject();
+            try {
+                if (req.join_muted != null) body.put("joinMuted", req.join_muted);
+                if (req.messages_enabled != null) body.put("messagesEnabled", req.messages_enabled);
+                if (req.reset_invite_hash) body.put("resetInviteHash", true);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "PATCH", "", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.toggleGroupCallRecord) {
+            TL_phone.toggleGroupCallRecord req = (TL_phone.toggleGroupCallRecord) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("start", req.start);
+                body.put("video", req.video);
+                body.put("videoPortrait", req.video_portrait);
+                if (req.title != null) body.put("title", req.title);
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "POST", "/record", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.editGroupCallParticipant) {
+            TL_phone.editGroupCallParticipant req = (TL_phone.editGroupCallParticipant) request;
+            JSONObject body = new JSONObject();
+            String peerId = null;
+            try {
+                long userTlId = req.participant != null ? req.participant.user_id : 0;
+                peerId = userTlId != 0 ? userMongoIdByTlId.get(userTlId) : null;
+                if (peerId == null && req.participant != null && req.participant.channel_id != 0) {
+                    peerId = conversationIdByChatPeer.get(req.participant.channel_id);
+                }
+                if ((req.flags & TLObject.FLAG_0) != 0) body.put("muted", req.muted);
+                if ((req.flags & TLObject.FLAG_1) != 0) body.put("volume", req.volume);
+                if ((req.flags & TLObject.FLAG_2) != 0) body.put("raiseHand", req.raise_hand);
+                if ((req.flags & TLObject.FLAG_3) != 0) body.put("videoStopped", req.video_stopped);
+                if ((req.flags & TLObject.FLAG_4) != 0) body.put("videoPaused", req.video_paused);
+                if ((req.flags & TLObject.FLAG_5) != 0) body.put("presentationPaused", req.presentation_paused);
+            } catch (Exception ignore) {
+            }
+            if (peerId == null) {
+                complete(onComplete, null, tlError(400, "PARTICIPANT_ID_INVALID"));
+                return true;
+            }
+            groupCallPost(req.call, "PATCH", "/participants/" + peerId, body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.joinGroupCallPresentation) {
+            TL_phone.joinGroupCallPresentation req = (TL_phone.joinGroupCallPresentation) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("params", req.params != null ? req.params.data : "");
+            } catch (Exception ignore) {
+            }
+            groupCallPost(req.call, "POST", "/presentation", body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.leaveGroupCallPresentation) {
+            groupCallPost(((TL_phone.leaveGroupCallPresentation) request).call, "POST", "/presentation/leave", new JSONObject(), onComplete, false);
+            return true;
+        }
+        if (request instanceof TL_phone.getGroupCall) {
+            TL_phone.getGroupCall req = (TL_phone.getGroupCall) request;
+            executor.execute(() -> {
+                try {
+                    String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
+                    if (callId == null) {
+                        complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+                        return;
+                    }
+                    JSONObject resp = request("GET", "/group-calls/" + callId + "?limit=" + Math.max(1, req.limit), null, true);
+                    TL_phone.groupCall res = new TL_phone.groupCall();
+                    JSONObject call = resp.optJSONObject("call") != null ? resp.getJSONObject("call") : resp;
+                    res.call = buildGroupCall(call);
+                    buildGroupCallParticipants(resp.optJSONArray("participants"), res.participants, res.users);
+                    res.participants_next_offset = resp.optString("nextOffset", "");
+                    complete(onComplete, res, null);
+                } catch (Exception e) {
+                    completeCallError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_phone.getGroupParticipants) {
+            TL_phone.getGroupParticipants req = (TL_phone.getGroupParticipants) request;
+            executor.execute(() -> {
+                try {
+                    String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
+                    if (callId == null) {
+                        complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+                        return;
+                    }
+                    StringBuilder q = new StringBuilder("/group-calls/" + callId + "/participants?limit=" + Math.max(1, req.limit));
+                    if (req.offset != null && !req.offset.isEmpty()) q.append("&offset=").append(java.net.URLEncoder.encode(req.offset, "UTF-8"));
+                    StringBuilder ids = new StringBuilder();
+                    for (TLRPC.InputPeer p : req.ids) {
+                        String id = p.user_id != 0 ? userMongoIdByTlId.get(p.user_id) : null;
+                        if (id != null) ids.append(ids.length() > 0 ? "," : "").append(id);
+                    }
+                    if (ids.length() > 0) q.append("&ids=").append(ids);
+                    StringBuilder sources = new StringBuilder();
+                    for (Integer s : req.sources) sources.append(sources.length() > 0 ? "," : "").append(s);
+                    if (sources.length() > 0) q.append("&sources=").append(sources);
+                    JSONObject resp = request("GET", q.toString(), null, true);
+                    TL_phone.groupParticipants res = new TL_phone.groupParticipants();
+                    buildGroupCallParticipants(resp.optJSONArray("participants"), res.participants, res.users);
+                    res.count = resp.optInt("count", res.participants.size());
+                    res.next_offset = resp.optString("nextOffset", "");
+                    res.version = resp.optInt("version", 0);
+                    complete(onComplete, res, null);
+                } catch (Exception e) {
+                    completeCallError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_phone.checkGroupCall) {
+            TL_phone.checkGroupCall req = (TL_phone.checkGroupCall) request;
+            executor.execute(() -> {
+                Vector<Vector.Int> res = new Vector<>(Vector.Int::TLDeserialize);
+                try {
+                    String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
+                    if (callId != null) {
+                        JSONObject body = new JSONObject();
+                        JSONArray sources = new JSONArray();
+                        for (Integer s : req.sources) sources.put(s);
+                        body.put("sources", sources);
+                        JSONArray ok = request("POST", "/group-calls/" + callId + "/check", body, true).optJSONArray("sources");
+                        if (ok != null) {
+                            for (int i = 0; i < ok.length(); i++) res.objects.add(new Vector.Int(ok.optInt(i)));
+                        }
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, res, null);
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // withResult: answer with the Updates built from the server's reply,
+    // otherwise with empty Updates (leaving must never get stuck)
+    private void groupCallPost(TLRPC.InputGroupCall inputCall, String method, String suffix, JSONObject body, RequestDelegate onComplete, boolean withResult) {
+        executor.execute(() -> {
+            try {
+                String callId = inputCall != null ? groupCallMongoIdByTlId.get(inputCall.id) : null;
+                if (callId == null) {
+                    complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+                    return;
+                }
+                JSONObject resp = request(method, "/group-calls/" + callId + suffix, body, true);
+                complete(onComplete, withResult ? groupCallUpdates(resp, null) : new TLRPC.TL_updates(), null);
+            } catch (Exception e) {
+                if (withResult) {
+                    completeCallError(onComplete, e);
+                } else {
+                    complete(onComplete, new TLRPC.TL_updates(), null);
+                }
+            }
+        });
+    }
+
+    // {call, participants?, connection?: {params, presentation}, conversationId?, users?}
+    // (REST replies and the socket events "group_call", "group_call_participants",
+    // "group_call_connection") -> Updates
+    public TLRPC.TL_updates groupCallUpdates(JSONObject resp, String convIdHint) throws Exception {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        if (resp == null) return updates;
+        JSONObject connection = resp.optJSONObject("connection");
+        if (connection != null) {
+            TL_update.TL_updateGroupCallConnection u = new TL_update.TL_updateGroupCallConnection();
+            u.presentation = connection.optBoolean("presentation", false);
+            u.params = new TLRPC.TL_dataJSON();
+            Object params = connection.opt("params");
+            u.params.data = params == null ? "{}" : String.valueOf(params);
+            updates.updates.add(u);
+        }
+        JSONObject call = resp.optJSONObject("call");
+        TLRPC.GroupCall groupCall = null;
+        if (call != null) {
+            groupCall = buildGroupCall(call);
+            String convId = call.optString("conversationId", resp.optString("conversationId", convIdHint == null ? "" : convIdHint));
+            if (!convId.isEmpty()) {
+                TL_update.TL_updateGroupCall u = new TL_update.TL_updateGroupCall();
+                TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
+                peer.channel_id = idFromMongoId(convId);
+                u.peer = peer;
+                u.call = groupCall;
+                updates.updates.add(u);
+            }
+        }
+        JSONArray participants = resp.optJSONArray("participants");
+        if (participants != null && participants.length() > 0) {
+            TL_update.TL_updateGroupCallParticipants u = new TL_update.TL_updateGroupCallParticipants();
+            String callId = resp.optString("callId", call != null ? call.optString("_id", call.optString("id", "")) : "");
+            if (callId.isEmpty()) return updates;
+            long callTlId = idFromMongoId(callId);
+            groupCallMongoIdByTlId.put(callTlId, callId);
+            TLRPC.TL_inputGroupCall input = new TLRPC.TL_inputGroupCall();
+            input.id = callTlId;
+            input.access_hash = groupCall != null ? groupCall.access_hash : callTlId ^ 0x7e9c4a11L;
+            u.call = input;
+            u.version = resp.optInt("version", groupCall != null ? groupCall.version : 0);
+            buildGroupCallParticipants(participants, u.participants, updates.users);
+            updates.updates.add(u);
+        }
+        return updates;
+    }
+
+    private TLRPC.GroupCall buildGroupCall(JSONObject c) {
+        String mongoId = c.optString("_id", c.optString("id", ""));
+        long id = idFromMongoId(mongoId);
+        groupCallMongoIdByTlId.put(id, mongoId);
+        long accessHash = id ^ 0x7e9c4a11L;
+        try {
+            if (c.has("accessHash")) accessHash = Long.parseLong(c.getString("accessHash"));
+        } catch (Exception ignore) {
+        }
+        if (c.has("active") && !c.optBoolean("active", true)) {
+            TLRPC.TL_groupCallDiscarded d = new TLRPC.TL_groupCallDiscarded();
+            d.id = id;
+            d.access_hash = accessHash;
+            d.duration = c.optInt("duration", 0);
+            return d;
+        }
+        TLRPC.TL_groupCall g = new TLRPC.TL_groupCall();
+        g.id = id;
+        g.access_hash = accessHash;
+        g.participants_count = c.optInt("participantsCount", 0);
+        g.join_muted = c.optBoolean("joinMuted", false);
+        g.can_change_join_muted = c.optBoolean("canChangeJoinMuted", false);
+        g.schedule_start_subscribed = c.optBoolean("scheduleStartSubscribed", false);
+        g.can_start_video = c.optBoolean("canStartVideo", true);
+        g.record_video_active = c.optBoolean("recordVideoActive", false);
+        g.creator = c.optBoolean("creator", false);
+        g.messages_enabled = c.optBoolean("messagesEnabled", false);
+        g.can_change_messages_enabled = c.optBoolean("canChangeMessagesEnabled", false);
+        g.flags = setFlag(g.flags, TLObject.FLAG_1, g.join_muted);
+        g.flags = setFlag(g.flags, TLObject.FLAG_2, g.can_change_join_muted);
+        g.flags = setFlag(g.flags, TLObject.FLAG_8, g.schedule_start_subscribed);
+        g.flags = setFlag(g.flags, TLObject.FLAG_9, g.can_start_video);
+        g.flags = setFlag(g.flags, TLObject.FLAG_11, g.record_video_active);
+        g.flags = setFlag(g.flags, TLObject.FLAG_15, g.creator);
+        String title = c.optString("title", "");
+        if (!title.isEmpty()) {
+            g.title = title;
+            g.flags |= TLObject.FLAG_3;
+        }
+        g.record_start_date = callTime(c, "recordStartDate");
+        if (g.record_start_date != 0) g.flags |= TLObject.FLAG_5;
+        g.schedule_date = callTime(c, "scheduleDate");
+        if (g.schedule_date != 0) g.flags |= TLObject.FLAG_7;
+        if (c.has("unmutedVideoCount")) {
+            g.unmuted_video_count = c.optInt("unmutedVideoCount", 0);
+            g.flags |= TLObject.FLAG_10;
+        }
+        g.unmuted_video_limit = c.optInt("unmutedVideoLimit", 30);
+        g.version = c.optInt("version", 1);
+        return g;
+    }
+
+    private static int setFlag(int flags, int flag, boolean on) {
+        return on ? flags | flag : flags & ~flag;
+    }
+
+    private void buildGroupCallParticipants(JSONArray list, ArrayList<TLRPC.GroupCallParticipant> out, ArrayList<TLRPC.User> users) {
+        if (list == null) return;
+        java.util.HashSet<Long> added = new java.util.HashSet<>();
+        for (TLRPC.User u : users) added.add(u.id);
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject p = list.optJSONObject(i);
+            if (p == null) continue;
+            JSONObject userJson = p.optJSONObject("user");
+            String userId = userJson != null ? userJson.optString("_id", "") : p.optString("userId", p.optString("peerId", ""));
+            if (userId.isEmpty()) continue;
+            addCallUser(userJson, users, added);
+            TLRPC.TL_groupCallParticipant gp = new TLRPC.TL_groupCallParticipant();
+            TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+            peer.user_id = idFromMongoId(userId);
+            gp.peer = peer;
+            gp.date = callTime(p, "date");
+            if (gp.date == 0) gp.date = (int) (System.currentTimeMillis() / 1000L);
+            gp.source = p.optInt("source", 0);
+            gp.muted = p.optBoolean("muted", false);
+            gp.left = p.optBoolean("left", false);
+            gp.can_self_unmute = p.optBoolean("canSelfUnmute", true);
+            gp.just_joined = p.optBoolean("justJoined", false);
+            gp.versioned = p.optBoolean("versioned", true);
+            gp.muted_by_you = p.optBoolean("mutedByYou", false);
+            gp.volume_by_admin = p.optBoolean("volumeByAdmin", false);
+            gp.self = userId.equals(selfMongoId);
+            gp.video_joined = p.optBoolean("videoJoined", false);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_0, gp.muted);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_1, gp.left);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_2, gp.can_self_unmute);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_4, gp.just_joined);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_5, gp.versioned);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_9, gp.muted_by_you);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_10, gp.volume_by_admin);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_12, gp.self);
+            gp.flags = setFlag(gp.flags, TLObject.FLAG_15, gp.video_joined);
+            gp.active_date = callTime(p, "activeDate");
+            if (gp.active_date != 0) gp.flags |= TLObject.FLAG_3;
+            if (p.has("volume")) {
+                gp.volume = p.optInt("volume", 10000);
+                gp.flags |= TLObject.FLAG_7;
+            }
+            String about = p.optString("about", "");
+            if (!about.isEmpty()) {
+                gp.about = about;
+                gp.flags |= TLObject.FLAG_11;
+            }
+            long raiseHand = p.optLong("raiseHandRating", 0);
+            if (raiseHand != 0) {
+                gp.raise_hand_rating = raiseHand;
+                gp.flags |= TLObject.FLAG_13;
+            }
+            gp.video = groupCallVideo(p.optJSONObject("video"));
+            if (gp.video != null) gp.flags |= TLObject.FLAG_6;
+            gp.presentation = groupCallVideo(p.optJSONObject("presentation"));
+            if (gp.presentation != null) gp.flags |= TLObject.FLAG_14;
+            out.add(gp);
+        }
+    }
+
+    private static TLRPC.TL_groupCallParticipantVideo groupCallVideo(JSONObject v) {
+        if (v == null) return null;
+        TLRPC.TL_groupCallParticipantVideo video = new TLRPC.TL_groupCallParticipantVideo();
+        video.paused = v.optBoolean("paused", false);
+        if (video.paused) video.flags |= TLObject.FLAG_0;
+        video.endpoint = v.optString("endpoint", "");
+        JSONArray groups = v.optJSONArray("sourceGroups");
+        if (groups != null) {
+            for (int i = 0; i < groups.length(); i++) {
+                JSONObject g = groups.optJSONObject(i);
+                if (g == null) continue;
+                TLRPC.TL_groupCallParticipantVideoSourceGroup sg = new TLRPC.TL_groupCallParticipantVideoSourceGroup();
+                sg.semantics = g.optString("semantics", "SIM");
+                JSONArray sources = g.optJSONArray("sources");
+                if (sources != null) {
+                    for (int j = 0; j < sources.length(); j++) sg.sources.add(sources.optInt(j));
+                }
+                video.source_groups.add(sg);
+            }
+        }
+        if (v.has("audioSource")) {
+            video.audio_source = v.optInt("audioSource", 0);
+            video.flags |= TLObject.FLAG_1;
+        }
+        return video;
+    }
+
+    // conv.groupCall {id, accessHash?, participantsCount} -> the "voice chat" bar and
+    // chatFull.call (Telegram's GroupCallActivity joins it from there)
+    private TLRPC.TL_inputGroupCall activeGroupCall(JSONObject conv) {
+        JSONObject gc = conv.optJSONObject("groupCall");
+        if (gc == null || !gc.optBoolean("active", true)) return null;
+        String callId = gc.optString("_id", gc.optString("id", ""));
+        if (callId.isEmpty()) return null;
+        TLRPC.TL_inputGroupCall input = new TLRPC.TL_inputGroupCall();
+        input.id = idFromMongoId(callId);
+        groupCallMongoIdByTlId.put(input.id, callId);
+        input.access_hash = input.id ^ 0x7e9c4a11L;
+        try {
+            if (gc.has("accessHash")) input.access_hash = Long.parseLong(gc.getString("accessHash"));
+        } catch (Exception ignore) {
+        }
+        return input;
     }
 
     // ---------------------------------------------------------------
@@ -8173,6 +9138,11 @@ public class RestBridge {
                 full.participants_hidden = conv.optBoolean("participantsHidden", false);
                 full.can_view_participants = isAdmin || !full.participants_hidden;
                 full.available_reactions = availableReactionsFor(conv);
+                TLRPC.TL_inputGroupCall activeCall = activeGroupCall(conv);
+                if (activeCall != null) {
+                    full.call = activeCall;
+                    full.flags |= TLObject.FLAG_21;
+                }
                 full.flags |= TLObject.FLAG_30;
                 JSONArray participantsJson = conv.optJSONArray("participants");
                 if (participantsJson != null) {
@@ -9900,11 +10870,11 @@ public class RestBridge {
             channel.flags2 |= TLObject.FLAG_8;
         }
 
-        JSONObject voiceCall = conv.optJSONObject("voiceCall");
-        if (voiceCall != null && voiceCall.optBoolean("isLive", false)) {
+        // Active voice chat (Telegram's GroupCallActivity): conv.groupCall
+        JSONObject groupCallJson = conv.optJSONObject("groupCall");
+        if (activeGroupCall(conv) != null) {
             channel.call_active = true;
-            JSONArray callers = voiceCall.optJSONArray("participants");
-            channel.call_not_empty = callers != null && callers.length() > 0;
+            channel.call_not_empty = groupCallJson.optInt("participantsCount", 0) > 0;
         }
 
         String linked = refId(conv, "linkedDiscussionGroupId");
