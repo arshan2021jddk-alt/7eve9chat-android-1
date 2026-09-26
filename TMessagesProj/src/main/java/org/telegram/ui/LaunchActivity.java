@@ -276,6 +276,13 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         String mapped;
         if (path.startsWith("/invite/") && path.length() > 8) {
             mapped = "/+" + path.substring(8);
+        } else if (path.startsWith("/joinchat/") && path.length() > 10) {
+            mapped = "/+" + path.substring(10);
+        } else if (path.matches("^/\\+[\\w-]+/?$")
+                || path.matches("^/c/\\d+(/\\d+){0,2}/?$")
+                || path.matches("^/(addstickers|addemoji|share|addtheme|boost|giftcode|m|nft|contact)/.+")) {
+            // same paths as t.me: /+CODE, /c/<chat>/<post>, sticker / emoji packs, share, ...
+            mapped = path;
         } else if ((path.startsWith("/gp/") || path.startsWith("/cl/") || path.startsWith("/pv/")) && path.length() > 4) {
             mapped = "/" + path.substring(4);
         } else if (path.matches("^/[a-zA-Z][a-zA-Z0-9_]{3,31}(/\\d+)?/?$") && !path.startsWith("/admin") && !path.startsWith("/login")) {

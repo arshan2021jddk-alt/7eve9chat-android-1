@@ -104,6 +104,19 @@ public class SocketBridge {
         socket.on("phone_call_signaling", args -> onCallEvent(args, 1));
         socket.on("group_call", args -> onCallEvent(args, 2));
         socket.on("group_call_participants", args -> onCallEvent(args, 2));
+        socket.on("group_call_message", args -> {
+            try {
+                if (args.length == 0 || !(args[0] instanceof JSONObject)) return;
+                TLRPC.Update u = RestBridge.getInstance(currentAccount).groupCallMessageUpdate((JSONObject) args[0]);
+                if (u == null) return;
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(u);
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                deliver(updates);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
         socket.on("group_call_connection", args -> onCallEvent(args, 2));
         socket.on(Socket.EVENT_DISCONNECT, args ->
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));

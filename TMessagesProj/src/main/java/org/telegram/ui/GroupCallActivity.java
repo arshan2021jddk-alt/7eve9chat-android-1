@@ -7793,9 +7793,13 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
                             getUndoView().showWithAction(0, UndoView.ACTION_VOIP_KICKED, user, null, null, null);
                         }
                     } else if (object instanceof TLRPC.User) {
+                        // 7eve9chat: "Remove" only takes them out of this voice chat - they stay in the group
                         TLRPC.User user = (TLRPC.User) object;
-                        accountInstance.getMessagesController().deleteParticipantFromChat(getChatId(), user);
-                        getUndoView().showWithAction(0, UndoView.ACTION_VOIP_REMOVED, user, null, null, null);
+                        if (call != null && call.call != null) {
+                            org.telegram.tgnet.RestBridge.getInstance(currentAccount).kickFromGroupCall(call.call.id, user.id);
+                            call.addKickedUser(user.id);
+                        }
+                        getUndoView().showWithAction(0, UndoView.ACTION_VOIP_KICKED, user, null, null, null);
                     } else {
                         TLRPC.Chat chat = (TLRPC.Chat) object;
                         accountInstance.getMessagesController().deleteParticipantFromChat(getChatId(), null, chat, false, false);

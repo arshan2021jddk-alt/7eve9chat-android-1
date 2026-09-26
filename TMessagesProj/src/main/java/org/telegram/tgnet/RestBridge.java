@@ -5306,17 +5306,33 @@ public class RestBridge {
     private void handleGetStickerSet(TLRPC.TL_messages_getStickerSet req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
-                String mongoSetId = stickerSetMongoIdById.get(req.stickerset.id);
+                long setTlId = req.stickerset.id;
+                String mongoSetId = stickerSetMongoIdById.get(setTlId);
+                JSONArray stickers = null;
+                if (mongoSetId == null && req.stickerset instanceof TLRPC.TL_inputStickerSetShortName) {
+                    // a 7eve9craft.ir/addstickers/NAME or /addemoji/NAME link
+                    String name = ((TLRPC.TL_inputStickerSetShortName) req.stickerset).short_name;
+                    boolean emoji = name != null && name.endsWith("_emoji");
+                    if (emoji) name = name.substring(0, name.length() - 6);
+                    JSONObject found = request("GET", "/stickers/sets/by-name/" + java.net.URLEncoder.encode(name == null ? "" : name, "UTF-8"), null, true);
+                    JSONObject js = found.getJSONObject("set");
+                    mongoSetId = js.getString("_id");
+                    setTlId = idFromMongoId(mongoSetId) ^ (emoji || js.optBoolean("isEmoji", false) ? 0x4000000000000000L : 0);
+                    if (setTlId != idFromMongoId(mongoSetId)) emojiSetIds.add(setTlId);
+                    stickerSetMongoIdById.put(setTlId, mongoSetId);
+                    stickerSetMetaById.put(setTlId, new String[]{js.optString("title", "Stickers"), selfMongoId != null && selfMongoId.equals(refId(js, "creator")) ? "1" : "0"});
+                    stickers = found.optJSONArray("stickers");
+                }
                 if (mongoSetId == null) {
                     complete(onComplete, null, restError(404, "Unknown sticker set"));
                     return;
                 }
-                JSONArray stickers = requestArray("GET", "/stickers?setId=" + mongoSetId, null, true);
+                if (stickers == null) stickers = requestArray("GET", "/stickers?setId=" + mongoSetId, null, true);
 
                 TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
-                set.id = req.stickerset.id;
+                set.id = setTlId;
                 set.access_hash = 1;
-                String[] meta = stickerSetMetaById.get(req.stickerset.id);
+                String[] meta = stickerSetMetaById.get(setTlId);
                 set.title = meta != null ? meta[0] : "Stickers";
                 set.creator = meta != null && "1".equals(meta[1]);
                 set.short_name = req.stickerset.short_name != null ? req.stickerset.short_name : mongoSetId;
@@ -5680,6 +5696,31 @@ public class RestBridge {
     // (e.g. "wallpaper changed"); everything else is a normal message.
     TLRPC.Message buildAnyMessage(JSONObject m, TLRPC.Peer peer) throws Exception {
         JSONObject action = m.optJSONObject("systemAction");
+        if ("system".equals(m.optString("type")) && action != null && "group_call".equals(action.optString("type"))
+                && action.optString("callId", "").length() == 24) {
+            // "Voice chat started" / "Voice chat ended"
+            TLRPC.TL_message base = buildTLMessage(m, peer);
+            TLRPC.TL_messageService service = new TLRPC.TL_messageService();
+            service.id = base.id;
+            service.date = base.date;
+            service.peer_id = base.peer_id;
+            service.dialog_id = base.dialog_id;
+            service.from_id = base.from_id;
+            service.out = base.out;
+            if (service.from_id != null) service.flags |= TLObject.FLAG_8;
+            TLRPC.TL_messageActionGroupCall gc = new TLRPC.TL_messageActionGroupCall();
+            TLRPC.TL_inputGroupCall input = new TLRPC.TL_inputGroupCall();
+            input.id = idFromMongoId(action.getString("callId"));
+            input.access_hash = input.id ^ 0x7e9c4a11L;
+            groupCallMongoIdByTlId.put(input.id, action.getString("callId"));
+            gc.call = input;
+            if (action.has("duration")) {
+                gc.duration = action.optInt("duration", 0);
+                gc.flags |= TLObject.FLAG_0;
+            }
+            service.action = gc;
+            return service;
+        }
         if ("system".equals(m.optString("type")) && action != null && "set_chat_theme".equals(action.optString("type"))) {
             TLRPC.TL_message base = buildTLMessage(m, peer);
             TLRPC.TL_messageService service = new TLRPC.TL_messageService();
@@ -6669,10 +6710,21 @@ public class RestBridge {
         }
         if (request instanceof TL_phone.exportGroupCallInvite) {
             TL_phone.exportGroupCallInvite req = (TL_phone.exportGroupCallInvite) request;
-            TL_phone.exportedGroupCallInvite res = new TL_phone.exportedGroupCallInvite();
             String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
-            res.link = "https://7eve9craft.ir/voicechat/" + (callId != null ? callId : "");
-            complete(onComplete, res, null);
+            executor.execute(() -> {
+                try {
+                    if (callId == null) {
+                        complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+                        return;
+                    }
+                    // Telegram's form: 7eve9craft.ir/<group>?voicechat=... (opens the chat and joins the call)
+                    TL_phone.exportedGroupCallInvite res = new TL_phone.exportedGroupCallInvite();
+                    res.link = request("GET", "/group-calls/" + callId + "/invite", null, true).getString("link");
+                    complete(onComplete, res, null);
+                } catch (Exception e) {
+                    complete(onComplete, null, genericError(e));
+                }
+            });
             return true;
         }
         if (request instanceof TL_phone.createGroupCall) {
@@ -6779,7 +6831,8 @@ public class RestBridge {
             String peerId = null;
             try {
                 long userTlId = req.participant != null ? req.participant.user_id : 0;
-                peerId = userTlId != 0 ? userMongoIdByTlId.get(userTlId) : null;
+                peerId = req.participant instanceof TLRPC.TL_inputPeerSelf ? selfMongoId // raise hand, mute myself
+                        : userTlId != 0 ? (selfMongoId != null && userTlId == idFromMongoId(selfMongoId) ? selfMongoId : userMongoIdByTlId.get(userTlId)) : null;
                 if (peerId == null && req.participant != null && req.participant.channel_id != 0) {
                     peerId = conversationIdByChatPeer.get(req.participant.channel_id);
                 }
@@ -6796,6 +6849,32 @@ public class RestBridge {
                 return true;
             }
             groupCallPost(req.call, "PATCH", "/participants/" + peerId, body, onComplete, true);
+            return true;
+        }
+        if (request instanceof TL_phone.sendGroupCallMessage) {
+            TL_phone.sendGroupCallMessage req = (TL_phone.sendGroupCallMessage) request;
+            JSONObject body = new JSONObject();
+            try {
+                body.put("text", req.message != null && req.message.text != null ? req.message.text : "");
+                body.put("randomId", String.valueOf(req.random_id));
+                if (req.message != null) body.put("entities", entitiesToJson(req.message.entities));
+            } catch (Exception ignore) {
+            }
+            String callId = req.call != null ? groupCallMongoIdByTlId.get(req.call.id) : null;
+            executor.execute(() -> {
+                try {
+                    if (callId == null) {
+                        complete(onComplete, null, tlError(400, "GROUPCALL_INVALID"));
+                        return;
+                    }
+                    request("POST", "/group-calls/" + callId + "/messages", body, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (RestException e) {
+                    complete(onComplete, new TLRPC.TL_boolFalse(), null);
+                } catch (Exception e) {
+                    complete(onComplete, null, genericError(e));
+                }
+            });
             return true;
         }
         if (request instanceof TL_phone.joinGroupCallPresentation) {
@@ -6895,6 +6974,52 @@ public class RestBridge {
 
     // withResult: answer with the Updates built from the server's reply,
     // otherwise with empty Updates (leaving must never get stuck)
+    // Voice chat "Remove": out of this voice chat only, they stay in the group
+    public void kickFromGroupCall(long callTlId, long userTlId) {
+        executor.execute(() -> {
+            try {
+                String callId = groupCallMongoIdByTlId.get(callTlId);
+                String userId = userMongoIdByTlId.get(userTlId);
+                if (callId != null && userId != null) {
+                    request("POST", "/group-calls/" + callId + "/participants/" + userId + "/kick", new JSONObject(), true);
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+    }
+
+    // socket group_call_message -> updateGroupCallMessage (the voice chat's chat)
+    TLRPC.Update groupCallMessageUpdate(JSONObject m) {
+        String callMongoId = m.optString("callId", "");
+        Long callTlId = null;
+        for (Map.Entry<Long, String> e : groupCallMongoIdByTlId.entrySet()) {
+            if (e.getValue().equals(callMongoId)) {
+                callTlId = e.getKey();
+                break;
+            }
+        }
+        String from = m.optString("fromId", "");
+        if (callTlId == null || from.length() != 24) return null;
+        TL_update.TL_updateGroupCallMessage u = new TL_update.TL_updateGroupCallMessage();
+        TLRPC.TL_inputGroupCall input = new TLRPC.TL_inputGroupCall();
+        input.id = callTlId;
+        input.access_hash = callTlId ^ 0x7e9c4a11L;
+        u.call = input;
+        TLRPC.GroupCallMessage msg = new TLRPC.GroupCallMessage();
+        msg.id = m.optInt("id", 0);
+        msg.date = m.optInt("date", (int) (System.currentTimeMillis() / 1000L));
+        TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+        peer.user_id = idFromMongoId(from);
+        userMongoIdByTlId.put(peer.user_id, from);
+        msg.from_id = peer;
+        msg.message = new TLRPC.TL_textWithEntities();
+        msg.message.text = m.optString("text", "");
+        msg.message.entities = entitiesFromJson(m.optJSONArray("entities"));
+        u.message = msg;
+        return u;
+    }
+
     private void groupCallPost(TLRPC.InputGroupCall inputCall, String method, String suffix, JSONObject body, RequestDelegate onComplete, boolean withResult) {
         executor.execute(() -> {
             try {

@@ -4391,8 +4391,8 @@
     <string name="VoipConferenceRemoveMemberAlertTitle2">Remove participant</string>
     <string name="VoipConferenceRemoveMemberAlertText2">Do you want to remove %1$s from this group chat?</string>
     <string name="VoipGroupRemoveMemberAlertTitle2">Remove participant</string>
-    <string name="VoipGroupRemoveMemberAlertText2">Do you want to remove %1$s from the voice chat and ban them in %2$s?</string>
-    <string name="VoipChannelRemoveMemberAlertText2">Do you want to remove %1$s from the live stream and ban them in %2$s?</string>
+    <string name="VoipGroupRemoveMemberAlertText2">Do you want to remove %1$s from the voice chat? They stay in %2$s.</string>
+    <string name="VoipChannelRemoveMemberAlertText2">Do you want to remove %1$s from the live stream? They stay in %2$s.</string>
     <string name="VoipGroupRemovedFromGroup">**%1$s** removed from the group.</string>
     <string name="VoipConferenceKicked">**%1$s** removed from the group chat.</string>
     <string name="VoipGroupUserCanNowSpeak">**%1$s** can now speak.</string>
