@@ -10,6 +10,7 @@ import org.telegram.messenger.FileLog;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.tl.TL_iv;
+import org.telegram.tgnet.tl.TL_aicompose;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_bots;
 import org.telegram.tgnet.tl.TL_keyboard;
@@ -1408,6 +1409,84 @@ public class RestBridge {
                         complete(onComplete, null, tlError(400, "STARGIFT_SLUG_INVALID"));
                     }
                 });
+                return true;
+            }
+            // ---- Premium AI (Gemini on the server): transcription, translation, summaries, AI editor
+            if (request instanceof TLRPC.TL_messages_transcribeAudio) {
+                int msgId = ((TLRPC.TL_messages_transcribeAudio) request).msg_id;
+                aiCall("/ai/transcribe", () -> new JSONObject().put("messageId", messageMongoIdByTlId.get(msgId)), r -> {
+                    TLRPC.TL_messages_transcribedAudio res = new TLRPC.TL_messages_transcribedAudio();
+                    res.transcription_id = msgId;
+                    res.text = r.optString("text", "");
+                    res.pending = false;
+                    return res;
+                }, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_translateText) {
+                TLRPC.TL_messages_translateText t = (TLRPC.TL_messages_translateText) request;
+                executor.execute(() -> {
+                    try {
+                        JSONArray texts = new JSONArray();
+                        if (!t.text.isEmpty()) {
+                            for (TLRPC.TL_textWithEntities x : t.text) texts.put(x.text == null ? "" : x.text);
+                        } else {
+                            for (Integer id : t.id) {
+                                String mongoId = messageMongoIdByTlId.get(id);
+                                JSONArray found = mongoId == null ? null : requestArray("GET", "/messages/by-ids?ids=" + mongoId, null, true);
+                                texts.put(found != null && found.length() > 0 ? found.getJSONObject(0).optString("text", "") : "");
+                            }
+                        }
+                        JSONObject r = request("POST", "/ai/translate-text", new JSONObject().put("texts", texts).put("toLang", t.to_lang == null ? "fa" : t.to_lang), true);
+                        JSONArray out = r.optJSONArray("texts");
+                        TLRPC.TL_messages_translateResult res = new TLRPC.TL_messages_translateResult();
+                        for (int i = 0; i < texts.length(); i++) {
+                            TLRPC.TL_textWithEntities tw = new TLRPC.TL_textWithEntities();
+                            tw.text = out != null && i < out.length() ? out.optString(i, "") : texts.optString(i, "");
+                            res.result.add(tw);
+                        }
+                        complete(onComplete, res, null);
+                    } catch (RestException e) {
+                        complete(onComplete, null, tlError(400, "TRANSLATE_REQ_FAILED"));
+                    } catch (Exception e) {
+                        complete(onComplete, null, genericError(e));
+                    }
+                });
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_summarizeText) {
+                TLRPC.TL_messages_summarizeText t = (TLRPC.TL_messages_summarizeText) request;
+                aiCall("/ai/summarize", () -> {
+                    JSONObject b = new JSONObject().put("messageId", messageMongoIdByTlId.get(t.id));
+                    if (t.to_lang != null && !t.to_lang.isEmpty()) b.put("toLang", t.to_lang);
+                    return b;
+                }, r -> {
+                    TLRPC.TL_textWithEntities tw = new TLRPC.TL_textWithEntities();
+                    tw.text = r.optString("text", "");
+                    return tw;
+                }, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_composeMessageWithAI) {
+                TLRPC.TL_messages_composeMessageWithAI t = (TLRPC.TL_messages_composeMessageWithAI) request;
+                aiCall("/ai/compose", () -> {
+                    JSONObject b = new JSONObject().put("text", t.text != null && t.text.text != null ? t.text.text : "");
+                    if (t.proofread) b.put("proofread", true);
+                    if (t.emojify) b.put("emojify", true);
+                    if (t.translate_to_lang != null && !t.translate_to_lang.isEmpty()) b.put("translateTo", t.translate_to_lang);
+                    if (t.tone instanceof TL_aicompose.inputAiComposeToneDefault) b.put("tone", ((TL_aicompose.inputAiComposeToneDefault) t.tone).tone);
+                    else if (t.tone instanceof TL_aicompose.inputAiComposeToneSingleUse) b.put("customPrompt", ((TL_aicompose.inputAiComposeToneSingleUse) t.tone).custom_prompt);
+                    return b;
+                }, r -> {
+                    TLRPC.TL_composedMessageWithAI res = new TLRPC.TL_composedMessageWithAI();
+                    res.result_text = new TLRPC.TL_textWithEntities();
+                    res.result_text.text = r.optString("text", "");
+                    return res;
+                }, onComplete);
+                return true;
+            }
+            if (request instanceof TL_aicompose.getTones) {
+                complete(onComplete, new TL_aicompose.TL_tones(), null); // the editor's built-in tones only
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getMyStickers) {
@@ -5469,6 +5548,49 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // messages.getStickerSet -> GET /stickers?setId=...
     // ---------------------------------------------------------------
+    // Premium AI calls: POST body -> result TL object; PREMIUM_ACCOUNT_REQUIRED when not Premium
+    interface JsonBody { JSONObject get() throws Exception; }
+    interface JsonToTl { TLObject apply(JSONObject r) throws Exception; }
+
+    private void aiCall(String path, JsonBody body, JsonToTl toTl, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                complete(onComplete, toTl.apply(request("POST", path, body.get(), true)), null);
+            } catch (RestException e) {
+                complete(onComplete, null, tlError(e.statusCode == 403 ? 403 : 400, e.statusCode == 403 ? "PREMIUM_ACCOUNT_REQUIRED" : "AI_FAILED"));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Which Premium AI features the server offers this user (GET /ai/features); the UI
+    // shows their buttons only when true - non-Premium users never see them.
+    private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> aiFeatures = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile long aiFeaturesAt;
+
+    public static boolean aiFeature(int account, String name) {
+        RestBridge b = getInstance(account);
+        if (System.currentTimeMillis() - b.aiFeaturesAt > 10 * 60_000) b.refreshAiFeatures();
+        Boolean v = aiFeatures.get(account + ":" + name);
+        return v != null && v && org.telegram.messenger.UserConfig.getInstance(account).isPremium();
+    }
+
+    private void refreshAiFeatures() {
+        aiFeaturesAt = System.currentTimeMillis();
+        executor.execute(() -> {
+            try {
+                JSONObject f = request("GET", "/ai/features", null, true);
+                for (String k : new String[]{"transcribe", "editor", "summarize", "translate", "chat"}) {
+                    aiFeatures.put(currentAccount + ":" + k, f.optBoolean(k, false));
+                }
+            } catch (Exception e) {
+                aiFeaturesAt = 0;
+            }
+        });
+    }
+
     // Telegram's animated emoji: a message that is one emoji plays its animation (the
     // app looks it up by emoticon in this set's packs)
     private static final long ANIMATED_EMOJI_SET_ID = 0x7e9ae0001L;
@@ -10605,6 +10727,11 @@ public class RestBridge {
         String text = jsonStr(m, "text");
         if (text == null) text = "";
         msg.rich_message = richMessageFromJson(m);
+        if (text.length() > 600 && aiFeature(currentAccount, "summarize")) {
+            // Telegram shows "Summarize" on long messages (Premium)
+            msg.summary_from_language = text.matches("(?s).*[\\u0600-\\u06FF].*") ? "fa" : "en";
+            msg.flags2 |= TLObject.FLAG_11;
+        }
         if (msg.rich_message != null && "📄".equals(text)) text = "";
         msg.message = text;
         ArrayList<TLRPC.MessageEntity> entities = parseEntities(text);
@@ -11954,7 +12081,24 @@ public class RestBridge {
         user.verified = u.optBoolean("isVerified", false);
         user.scam = u.optBoolean("isScam", false);
         user.fake = u.optBoolean("isFake", false);
-        user.premium = u.optBoolean("isPremium", false);
+        if (u.has("isPremium")) {
+            user.premium = u.optBoolean("isPremium", false);
+        } else {
+            // a partial user object (message sender, member list...) doesn't say - keep what we
+            // know, so Premium doesn't flicker off until the next full profile load
+            TLRPC.User known = self ? org.telegram.messenger.UserConfig.getInstance(currentAccount).getCurrentUser()
+                    : org.telegram.messenger.MessagesController.getInstance(currentAccount).getUser(user.id);
+            user.premium = known != null && known.premium;
+        }
+        if (!u.has("emojiStatus") && user.emoji_status == null) {
+            // same for the emoji status / worn gift
+            TLRPC.User known = self ? org.telegram.messenger.UserConfig.getInstance(currentAccount).getCurrentUser()
+                    : org.telegram.messenger.MessagesController.getInstance(currentAccount).getUser(user.id);
+            if (known != null && known.emoji_status != null) {
+                user.emoji_status = known.emoji_status;
+                user.flags |= TLObject.FLAG_30;
+            }
+        }
         user.bot = u.optBoolean("isBot", false);
         if (user.bot) {
             user.bot_info_version = 1;

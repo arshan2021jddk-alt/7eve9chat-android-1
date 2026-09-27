@@ -6457,7 +6457,8 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
 
     private boolean shownAiButton;
     private void showAiButton(boolean show_) {
-        final boolean show = show_ && (baseFragment instanceof ChatActivity && !((ChatActivity) baseFragment).isSecretChat());
+        final boolean show = show_ && (baseFragment instanceof ChatActivity && !((ChatActivity) baseFragment).isSecretChat())
+            && org.telegram.tgnet.RestBridge.aiFeature(currentAccount, "editor"); // 7eve9chat: Premium only
 
         if (shownAiButton == show) return;
         if (show) {

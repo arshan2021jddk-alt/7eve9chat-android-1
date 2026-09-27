@@ -12650,6 +12650,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             seekBarWaveform.setWaveform(waveform);
         }
         useTranscribeButton = (
+            org.telegram.tgnet.RestBridge.aiFeature(currentAccount, "transcribe") && // 7eve9chat: Premium + available
             currentMessageObject != null &&
             !currentMessageObject.isQuickReply() &&
             !currentMessageObject.isRepostPreview &&

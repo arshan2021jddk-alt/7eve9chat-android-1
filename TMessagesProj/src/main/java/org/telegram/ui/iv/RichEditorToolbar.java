@@ -183,6 +183,8 @@ public class RichEditorToolbar extends FrameLayout {
         ScaleStateListAnimator.apply(aiButton);
         aiButton.setContentDescription("AI");
         aiButton.setOnClickListener(v -> delegate.onAi());
+        // 7eve9chat: the AI editor is a Premium feature (Gemini) - hidden for everyone else
+        if (!org.telegram.tgnet.RestBridge.aiFeature(org.telegram.messenger.UserConfig.selectedAccount, "editor")) aiButton.setVisibility(GONE);
 
         final FrameLayout blocksContainer2 = new FrameLayout(context);
         blocksContainer2.setClipToPadding(false);
@@ -402,6 +404,7 @@ public class RichEditorToolbar extends FrameLayout {
         aiStyleButton.setContentDescription(getString(R.string.AIEditor));
         aiStyleButton.setOnClickListener(v -> delegate.onAiStyle());
         formattingLayout1.addView(aiStyleButton, LayoutHelper.createLinear(38, 38, Gravity.CENTER_VERTICAL));
+        if (!org.telegram.tgnet.RestBridge.aiFeature(org.telegram.messenger.UserConfig.selectedAccount, "editor")) aiStyleButton.setVisibility(GONE); // Premium only
 
         sendButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourcesProvider, true) {
             @Override
