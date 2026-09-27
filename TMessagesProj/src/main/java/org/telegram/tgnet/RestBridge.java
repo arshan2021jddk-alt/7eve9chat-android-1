@@ -610,6 +610,14 @@ public class RestBridge {
                 handleSendCode((TLRPC.TL_auth_sendCode) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_auth_resendCode) {
+                handleResendCode((TLRPC.TL_auth_resendCode) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_auth_cancelCode) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                return true;
+            }
             if (request instanceof TLRPC.TL_auth_signIn) {
                 handleSignIn((TLRPC.TL_auth_signIn) request, onComplete);
                 return true;
@@ -2022,6 +2030,7 @@ public class RestBridge {
 
         String typeName = request.getClass().getSimpleName();
         FileLog.d("REST_BRIDGE_UNIMPLEMENTED " + typeName);
+        reportUnimplemented(typeName);
         TLRPC.TL_error error = new TLRPC.TL_error();
         // 406 = "silent" in Telegram's UI: no black error bar for features
         // this backend doesn't have.
@@ -2029,6 +2038,29 @@ public class RestBridge {
         error.text = "REST_BRIDGE_UNIMPLEMENTED:" + typeName;
         complete(onComplete, null, error);
         return true;
+    }
+
+    // Features the server doesn't have yet: each kind is reported once per run (batched),
+    // so the most wanted ones can be built next
+    private final java.util.Set<String> unimplementedReported = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private final java.util.List<String> unimplementedPending = java.util.Collections.synchronizedList(new ArrayList<>());
+
+    private void reportUnimplemented(String typeName) {
+        if (selfMongoId == null || !unimplementedReported.add(typeName)) return;
+        boolean first = unimplementedPending.isEmpty();
+        unimplementedPending.add(typeName);
+        if (!first) return;
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> executor.execute(() -> {
+            JSONArray list = new JSONArray();
+            synchronized (unimplementedPending) {
+                for (String n : unimplementedPending) list.put(n);
+                unimplementedPending.clear();
+            }
+            try {
+                request("POST", "/diag/unimplemented", new JSONObject().put("methods", list), true);
+            } catch (Exception ignore) {
+            }
+        }), 30000);
     }
 
     // ---------------------------------------------------------------
@@ -2040,18 +2072,53 @@ public class RestBridge {
             try {
                 JSONObject body = new JSONObject();
                 body.put("phone", phone);
-                request("POST", "/auth/send-otp", body, false);
+                JSONObject sent = request("POST", "/auth/send-otp", body, false);
 
                 String phoneCodeHash = "h_" + phone.hashCode() + "_" + System.currentTimeMillis();
                 pendingPhoneByHash.put(phoneCodeHash, phone);
+                complete(onComplete, sentCodeFor(sent, phoneCodeHash), null);
+            } catch (RestException e) {
+                complete(onComplete, null, mapSendCodeError(e));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
 
-                TLRPC.TL_auth_sentCode sentCode = new TLRPC.TL_auth_sentCode();
-                TLRPC.TL_auth_sentCodeTypeSms type = new TLRPC.TL_auth_sentCodeTypeSms();
-                type.length = 6;
-                sentCode.type = type;
-                sentCode.phone_code_hash = phoneCodeHash;
-                sentCode.flags = 0;
-                complete(onComplete, sentCode, null);
+    // Like Telegram: a code sent to the app (by 7eve9 Bot) can be sent again by SMS after a
+    // minute; a code sent by SMS is just an SMS code
+    private TLRPC.TL_auth_sentCode sentCodeFor(JSONObject sent, String phoneCodeHash) {
+        TLRPC.TL_auth_sentCode sentCode = new TLRPC.TL_auth_sentCode();
+        sentCode.phone_code_hash = phoneCodeHash;
+        sentCode.flags = 0;
+        if (sent != null && "bot".equals(sent.optString("method"))) {
+            TLRPC.TL_auth_sentCodeTypeApp type = new TLRPC.TL_auth_sentCodeTypeApp();
+            type.length = 6;
+            sentCode.type = type;
+            sentCode.next_type = new TLRPC.TL_auth_codeTypeSms();
+            sentCode.timeout = 60;
+            sentCode.flags |= 2 | 4;
+        } else {
+            TLRPC.TL_auth_sentCodeTypeSms type = new TLRPC.TL_auth_sentCodeTypeSms();
+            type.length = 6;
+            sentCode.type = type;
+        }
+        return sentCode;
+    }
+
+    // auth.resendCode -> POST /auth/send-otp { forceSms } ("Send the code as an SMS")
+    private void handleResendCode(TLRPC.TL_auth_resendCode req, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                String phone = pendingPhoneByHash.get(req.phone_code_hash);
+                if (phone == null) phone = normalizePhone(req.phone_number);
+                JSONObject body = new JSONObject();
+                body.put("phone", phone);
+                body.put("forceSms", true);
+                JSONObject sent = request("POST", "/auth/send-otp", body, false);
+                if (sent != null) sent.put("method", "sms");
+                complete(onComplete, sentCodeFor(sent, req.phone_code_hash), null);
             } catch (RestException e) {
                 complete(onComplete, null, mapSendCodeError(e));
             } catch (Exception e) {
@@ -9550,6 +9617,19 @@ public class RestBridge {
             settingsCall(body, g, onComplete);
             return true;
         }
+        if (request instanceof TL_account.deleteAccount) {
+            // delete my account for good (Settings > Privacy > Account self-destruct > Delete account now)
+            executor.execute(() -> {
+                try {
+                    request("DELETE", "/auth/me", null, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, genericError(e));
+                }
+            });
+            return true;
+        }
         if (request instanceof TL_account.getAccountTTL) {
             readSettings(st -> {
                 TLRPC.TL_accountDaysTTL ttl = new TLRPC.TL_accountDaysTTL();
@@ -12247,6 +12327,9 @@ public class RestBridge {
         if (!last.isEmpty()) {
             user.last_name = last;
             user.flags |= TLObject.FLAG_2; // last_name present
+        }
+        if (u.optBoolean("isDeleted", false)) {
+            user.deleted = true; // Telegram's "Deleted Account": no profile, can't be messaged
         }
 
         String username = jsonStr(u, "username");

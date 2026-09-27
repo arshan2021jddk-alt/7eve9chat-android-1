@@ -408,7 +408,40 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                     });
                 }
                 builder.setNegativeButton(getString(R.string.Cancel), null);
-                showDialog(builder.create());
+                // delete the account right away (also possible on the web: /deactivate)
+                builder.setNeutralButton(getString(R.string.DeleteAccountNow), (d, w) -> {
+                    AlertDialog.Builder confirm = new AlertDialog.Builder(getParentActivity());
+                    confirm.setTitle(getString(R.string.DeleteAccountNow));
+                    confirm.setMessage(AndroidUtilities.replaceTags(getString(R.string.DeleteAccountNowConfirm)));
+                    confirm.setNegativeButton(getString(R.string.Cancel), null);
+                    confirm.setPositiveButton(getString(R.string.DeleteAccountNowButton), (d2, w2) -> {
+                        final AlertDialog progress = new AlertDialog(getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER);
+                        progress.setCanCancel(false);
+                        progress.show();
+                        TL_account.deleteAccount req = new TL_account.deleteAccount();
+                        req.reason = "Deleted from the app";
+                        getConnectionsManager().sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+                            try {
+                                progress.dismiss();
+                            } catch (Exception e) {
+                                FileLog.e(e);
+                            }
+                            if (error == null) {
+                                getMessagesController().performLogout(0);
+                            } else {
+                                BulletinFactory.of(this).createErrorBulletin(error.text).show();
+                            }
+                        }));
+                    });
+                    AlertDialog dialog = confirm.create();
+                    showDialog(dialog);
+                    View button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+                    if (button instanceof android.widget.TextView) ((android.widget.TextView) button).setTextColor(Theme.getColor(Theme.key_text_RedBold));
+                });
+                AlertDialog ttlDialog = builder.create();
+                showDialog(ttlDialog);
+                View deleteNow = ttlDialog.getButton(DialogInterface.BUTTON_NEUTRAL);
+                if (deleteNow instanceof android.widget.TextView) ((android.widget.TextView) deleteNow).setTextColor(Theme.getColor(Theme.key_text_RedBold));
             } else if (position == lastSeenRow) {
                 presentFragment(new PrivacyControlActivity(ContactsController.PRIVACY_RULES_TYPE_LASTSEEN));
             } else if (position == phoneNumberRow) {
