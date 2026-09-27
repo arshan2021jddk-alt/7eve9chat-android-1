@@ -606,6 +606,9 @@ public class RestBridge {
             if (handleCallRequest(request, onComplete)) {
                 return true;
             }
+            if (handlePasswordRequest(request, onComplete)) {
+                return true;
+            }
             if (request instanceof TLRPC.TL_auth_sendCode) {
                 handleSendCode((TLRPC.TL_auth_sendCode) request, onComplete);
                 return true;
@@ -2209,7 +2212,25 @@ public class RestBridge {
                         ApplicationLoader.applicationContext.getContentResolver(),
                         android.provider.Settings.Secure.ANDROID_ID));
                 JSONObject resp = request("POST", "/auth/verify-otp", body, false);
+                if (resp.optBoolean("passwordNeeded", false)) {
+                    // two-step verification: the app asks for the password (auth.checkPassword)
+                    pendingLoginTicket = resp.optString("loginTicket", null);
+                    complete(onComplete, null, tlError(401, "SESSION_PASSWORD_NEEDED"));
+                    return;
+                }
+                completeLogin(resp, onComplete);
+            } catch (RestException e) {
+                complete(onComplete, null, mapSignInError(e));
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, genericError(e));
+            }
+        });
+    }
 
+    // signed in (after the code, or the code and the password): keep the session
+    private void completeLogin(JSONObject resp, RequestDelegate onComplete) throws Exception {
+                pendingLoginTicket = null;
                 String token = resp.getString("token");
                 setAuthToken(token);
 
@@ -2229,13 +2250,153 @@ public class RestBridge {
                 auth.user = user;
                 maybeConnectSocket();
                 complete(onComplete, auth, null);
-            } catch (RestException e) {
-                complete(onComplete, null, mapSignInError(e));
-            } catch (Exception e) {
-                FileLog.e(e);
-                complete(onComplete, null, genericError(e));
+    }
+
+    // ---------------------------------------------------------------
+    // Two-step verification (Telegram's SRP; the password never leaves the phone)
+    // ---------------------------------------------------------------
+    private volatile String pendingLoginTicket;
+
+    private static String b64(byte[] b) {
+        return android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP);
+    }
+
+    private static byte[] unb64(String s) {
+        return s == null || s.isEmpty() ? new byte[0] : android.util.Base64.decode(s, android.util.Base64.DEFAULT);
+    }
+
+    private static TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow srpAlgo(JSONObject i, String salt1, String salt2) {
+        TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow algo = new TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow();
+        algo.salt1 = unb64(i.optString(salt1));
+        algo.salt2 = unb64(i.optString(salt2));
+        algo.g = i.optInt("g", 3);
+        algo.p = unb64(i.optString("p"));
+        return algo;
+    }
+
+    private static TL_account.TL_password buildPassword(JSONObject i) {
+        TL_account.TL_password pw = new TL_account.TL_password();
+        pw.has_password = i.optBoolean("hasPassword", false);
+        if (pw.has_password) {
+            pw.flags |= 4;
+            pw.current_algo = srpAlgo(i, "salt1", "salt2");
+            pw.srp_B = unb64(i.optString("srpB"));
+            pw.srp_id = Long.parseLong(i.optString("srpId", "0"));
+            String hint = i.optString("hint", "");
+            if (!hint.isEmpty()) {
+                pw.hint = hint;
+                pw.flags |= 8;
             }
-        });
+        }
+        pw.new_algo = srpAlgo(i, "newSalt1", "newSalt2");
+        TLRPC.TL_securePasswordKdfAlgoPBKDF2HMACSHA512iter100000 secure = new TLRPC.TL_securePasswordKdfAlgoPBKDF2HMACSHA512iter100000();
+        secure.salt = new byte[8];
+        Utilities.random.nextBytes(secure.salt);
+        pw.new_secure_algo = secure;
+        pw.secure_random = unb64(i.optString("secureRandom"));
+        return pw;
+    }
+
+    private static JSONObject srpCheck(TLRPC.InputCheckPasswordSRP check) throws Exception {
+        if (!(check instanceof TLRPC.TL_inputCheckPasswordSRP)) return null;
+        TLRPC.TL_inputCheckPasswordSRP srp = (TLRPC.TL_inputCheckPasswordSRP) check;
+        return new JSONObject().put("srpId", String.valueOf(srp.srp_id)).put("A", b64(srp.A)).put("M1", b64(srp.M1));
+    }
+
+    private static TLRPC.TL_error passwordError(Exception e) {
+        String m = e instanceof RestException && ((RestException) e).message != null ? ((RestException) e).message : "";
+        java.util.regex.Matcher flood = java.util.regex.Pattern.compile("FLOOD_WAIT_(\\d+)").matcher(m);
+        if (flood.find()) return tlError(420, "FLOOD_WAIT_" + flood.group(1));
+        if (m.contains("PASSWORD_HASH_INVALID")) return tlError(400, "PASSWORD_HASH_INVALID");
+        if (m.contains("PHONE_CODE_EXPIRED")) return tlError(400, "PHONE_CODE_EXPIRED");
+        if (m.contains("NEW_SETTINGS_INVALID")) return tlError(400, "NEW_SETTINGS_INVALID");
+        return tlError(400, "PASSWORD_HASH_INVALID");
+    }
+
+    private boolean handlePasswordRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TL_account.getPassword) {
+            executor.execute(() -> {
+                try {
+                    String ticket = pendingLoginTicket;
+                    JSONObject info = authToken == null && ticket != null
+                            ? request("GET", "/auth/password/login?ticket=" + java.net.URLEncoder.encode(ticket, "UTF-8"), null, false)
+                            : request("GET", "/auth/password", null, true);
+                    complete(onComplete, buildPassword(info), null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, passwordError(e));
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_auth_checkPassword) {
+            TLRPC.InputCheckPasswordSRP check = ((TLRPC.TL_auth_checkPassword) request).password;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = srpCheck(check);
+                    if (body == null || pendingLoginTicket == null) {
+                        complete(onComplete, null, tlError(400, "PASSWORD_HASH_INVALID"));
+                        return;
+                    }
+                    body.put("ticket", pendingLoginTicket);
+                    completeLogin(request("POST", "/auth/password/login", body, false), onComplete);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, passwordError(e));
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_account.getPasswordSettings) {
+            TLRPC.InputCheckPasswordSRP check = ((TL_account.getPasswordSettings) request).password;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = srpCheck(check);
+                    request("POST", "/auth/password/check", body != null ? body : new JSONObject(), true);
+                    complete(onComplete, new TL_account.passwordSettings(), null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, passwordError(e));
+                }
+            });
+            return true;
+        }
+        if (request instanceof TL_account.updatePasswordSettings) {
+            TL_account.updatePasswordSettings req = (TL_account.updatePasswordSettings) request;
+            executor.execute(() -> {
+                try {
+                    TL_account.passwordInputSettings ns = req.new_settings;
+                    if (ns == null || ns.new_algo == null) {
+                        // only the recovery email or hint: there is no email recovery here
+                        complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                        return;
+                    }
+                    JSONObject body = new JSONObject();
+                    JSONObject check = srpCheck(req.password);
+                    if (check != null) body.put("check", check);
+                    if (ns.new_algo instanceof TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow
+                            && ns.new_password_hash != null && ns.new_password_hash.length > 0) {
+                        TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow algo = (TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow) ns.new_algo;
+                        body.put("newSalt1", b64(algo.salt1));
+                        body.put("newSalt2", b64(algo.salt2));
+                        body.put("newVerifier", b64(ns.new_password_hash));
+                        if (ns.hint != null) body.put("hint", ns.hint);
+                    } // else (passwordKdfAlgoUnknown): turn the password off
+                    request("PUT", "/auth/password", body, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, passwordError(e));
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_auth_requestPasswordRecovery) {
+            // no recovery email on this server
+            complete(onComplete, null, tlError(400, "PASSWORD_RECOVERY_NA"));
+            return true;
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------
