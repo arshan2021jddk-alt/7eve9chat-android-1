@@ -603,8 +603,10 @@ public class ContentPreviewViewer {
                         reactionsWindow.dismiss();
                     }
                     if (stickerSetCovered instanceof TLRPC.TL_stickerSetNoCovered) {
+                        final boolean emojiPack = stickerSetCovered.set != null && stickerSetCovered.set.emojis;
                         StickersDialogs.showNameEditorDialog(null, resourcesProvider, containerView.getContext(), (text, whenDone) -> {
                             if (delegate != null) {
+                                org.telegram.ui.Components.Paint.Views.StickerMakerView.nextPackIsEmoji = emojiPack;
                                 delegate.newStickerPackSelected(text, TextUtils.join("", selectedEmojis), whenDone != null ? success -> {
                                     whenDone.run(success);
                                     if (success) {
@@ -2278,8 +2280,9 @@ public class ContentPreviewViewer {
             }
             if (response instanceof TLRPC.TL_messages_myStickers) {
                 TLRPC.TL_messages_myStickers myStickers = (TLRPC.TL_messages_myStickers) response;
+                boolean premium = UserConfig.getInstance(currentAccount).isPremium();
                 for (TLRPC.StickerSetCovered set : myStickers.sets) {
-                    if (!set.set.emojis && !set.set.masks) {
+                    if ((!set.set.emojis || premium) && !set.set.masks) { // 7eve9chat: Premium users add to their emoji packs too
                         TLRPC.TL_inputStickerSetID inputStickerSetID = new TLRPC.TL_inputStickerSetID();
                         inputStickerSetID.id = set.set.id;
                         TLRPC.TL_messages_stickerSet fullSet = MediaDataController.getInstance(currentAccount).getStickerSet(inputStickerSetID, true);
@@ -2303,6 +2306,13 @@ public class ContentPreviewViewer {
 
         final List<TLRPC.StickerSetCovered> stickerSetCoveredList = new ArrayList<>();
         stickerSetCoveredList.add(new TLRPC.TL_stickerSetNoCovered());
+        if (UserConfig.getInstance(currentAccount).isPremium()) {
+            // 7eve9chat: "New emoji pack" - Premium users make their own premium emoji
+            TLRPC.TL_stickerSetNoCovered newEmojiPack = new TLRPC.TL_stickerSetNoCovered();
+            newEmojiPack.set = new TLRPC.TL_stickerSet();
+            newEmojiPack.set.emojis = true;
+            stickerSetCoveredList.add(newEmojiPack);
+        }
 
         final TLRPC.TL_messages_getMyStickers request = new TLRPC.TL_messages_getMyStickers();
         request.limit = 100;
@@ -2383,7 +2393,8 @@ public class ContentPreviewViewer {
         public void bind(TLRPC.StickerSetCovered cover) {
             this.cover = cover;
             if (cover instanceof TLRPC.TL_stickerSetNoCovered) {
-                textView.setText(LocaleController.getString(R.string.NewStickerPack));
+                boolean emojiPack = cover.set != null && cover.set.emojis;
+                textView.setText(emojiPack ? LocaleController.getString(R.string.S7NewEmojiPack) : LocaleController.getString(R.string.NewStickerPack));
                 imageView.setImageResource(R.drawable.msg_addbot);
                 return;
             }

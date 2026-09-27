@@ -1410,6 +1410,50 @@ public class RestBridge {
                 });
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_getMyStickers) {
+                // my own packs (the sticker maker's "add to pack" list); emoji packs flagged
+                executor.execute(() -> {
+                    TLRPC.TL_messages_myStickers res = new TLRPC.TL_messages_myStickers();
+                    try {
+                        TLRPC.TL_messages_getMyStickers r = (TLRPC.TL_messages_getMyStickers) request;
+                        if (r.offset_id == 0) {
+                            JSONArray sets = requestArray("GET", "/stickers/sets", null, true);
+                            for (int i = 0; i < sets.length(); i++) {
+                                JSONObject js = sets.getJSONObject(i);
+                                if (selfMongoId == null || !selfMongoId.equals(refId(js, "creator"))) continue;
+                                String mongoId = js.getString("_id");
+                                boolean emoji = js.optBoolean("isEmoji", false);
+                                long tlId = emoji ? idFromMongoId(mongoId) ^ 0x4000000000000000L : idFromMongoId(mongoId);
+                                stickerSetMongoIdById.put(tlId, mongoId);
+                                if (emoji) emojiSetIds.add(tlId);
+                                TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                                set.id = tlId;
+                                set.access_hash = 1;
+                                set.title = js.optString("title", "Stickers");
+                                set.short_name = js.optString("shortName", mongoId) + (emoji ? "_emoji" : "");
+                                set.creator = true;
+                                set.emojis = emoji;
+                                stickerSetMetaById.put(tlId, new String[]{set.title, "1"});
+                                TLRPC.TL_stickerSetCovered covered = new TLRPC.TL_stickerSetCovered();
+                                covered.set = set;
+                                JSONArray stickers = requestArray("GET", "/stickers?setId=" + mongoId, null, true);
+                                set.count = stickers.length();
+                                if (stickers.length() > 0) {
+                                    String url = jsonStr(stickers.getJSONObject(0), "url");
+                                    if (url != null) covered.cover = buildStickerDocument(absoluteUrl(url), set);
+                                }
+                                res.sets.add(covered);
+                            }
+                            savePeerMap("mediaMap", mediaUrlById);
+                        }
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    res.count = res.sets.size();
+                    complete(onComplete, res, null);
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_searchCustomEmoji) {
                 // premium emoji for a normal emoji (the suggestions over the keyboard)
                 String emoticon = ((TLRPC.TL_messages_searchCustomEmoji) request).emoticon;
@@ -5133,6 +5177,11 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("text", req.message);
                 body.put("entities", entitiesToJson(req.entities));
+                if (req.rich_message instanceof TL_iv.TL_inputRichMessage) {
+                    // editing an article: the new serialized blocks replace the old ones
+                    putRichMessage(body, (TL_iv.TL_inputRichMessage) req.rich_message);
+                    if (req.message == null || req.message.isEmpty()) body.put("text", "📄");
+                }
                 JSONObject edited = request("PUT", "/messages/" + mongoId, body, true);
 
                 TLRPC.Peer peer = req.peer instanceof TLRPC.TL_inputPeerUser

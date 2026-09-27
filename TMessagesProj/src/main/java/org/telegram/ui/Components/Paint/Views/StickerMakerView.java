@@ -83,6 +83,9 @@ import java.util.List;
 
 @SuppressLint("ViewConstructor")
 public class StickerMakerView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate {
+    // set by the pack list's "New emoji pack" (ContentPreviewViewer) for the next new pack
+    public static boolean nextPackIsEmoji;
+
 
     public int currentAccount = -1;
     private final AnimatedFloat segmentBorderAlpha = new AnimatedFloat(0, (View) null, 0, 420, CubicBezierInterpolator.EASE_OUT_QUINT);
@@ -1503,6 +1506,9 @@ public class StickerMakerView extends FrameLayout implements NotificationCenter.
         } else if (stickerUploader.stickerPackName != null) {
             TLRPC.TL_stickers_createStickerSet req = new TLRPC.TL_stickers_createStickerSet();
             req.user_id = new TLRPC.TL_inputUserSelf();
+            // 7eve9chat: "New emoji pack" (Premium) - the pack goes to the emoji keyboard
+            req.emojis = nextPackIsEmoji;
+            nextPackIsEmoji = false;
             req.title = stickerUploader.stickerPackName.toString();
             req.short_name = "";
             req.stickers.add(stickerUploader.tlInputStickerSetItem);
