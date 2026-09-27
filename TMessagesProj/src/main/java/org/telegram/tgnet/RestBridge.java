@@ -1478,6 +1478,32 @@ public class RestBridge {
                 handleSimpleConversationCall(req.channel.channel_id, "PUT", "/emoji-status", body, new TLRPC.TL_updates(), onComplete);
                 return true;
             }
+            if (request instanceof TL_stars.transferStarGift) {
+                // give my gift to someone else, or to a group / channel (it goes on its profile)
+                TL_stars.transferStarGift req = (TL_stars.transferStarGift) request;
+                executor.execute(() -> {
+                    try {
+                        String giftId = req.stargift instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) req.stargift).slug : null;
+                        String target = null;
+                        if (req.to_id != null && req.to_id.user_id != 0) target = userMongoIdByTlId.get(req.to_id.user_id);
+                        else if (req.to_id != null && (req.to_id.channel_id != 0 || req.to_id.chat_id != 0)) target = conversationIdByChatPeer.get(req.to_id.channel_id != 0 ? req.to_id.channel_id : req.to_id.chat_id);
+                        if (giftId == null || !giftId.matches("[0-9a-fA-F]{24}") || target == null) {
+                            complete(onComplete, null, tlError(400, "STARGIFT_INVALID"));
+                            return;
+                        }
+                        request("POST", "/gifts/transfer", new JSONObject().put("giftId", giftId).put("targetUserQuery", target), true);
+                        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                        updates.date = (int) (System.currentTimeMillis() / 1000L);
+                        complete(onComplete, updates, null);
+                    } catch (RestException e) {
+                        complete(onComplete, null, tlError(400, e.statusCode == 403 ? "STARGIFT_OWNER_INVALID" : "STARGIFT_INVALID"));
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                        complete(onComplete, null, genericError(e));
+                    }
+                });
+                return true;
+            }
             if (request instanceof TL_stars.getUniqueStarGift) {
                 // tapping a worn gift: the gift by its slug (= its id here)
                 String slug = ((TL_stars.getUniqueStarGift) request).slug;
