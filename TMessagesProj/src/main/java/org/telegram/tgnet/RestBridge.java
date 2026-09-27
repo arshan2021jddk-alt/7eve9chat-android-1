@@ -104,6 +104,7 @@ public class RestBridge {
     // TL photo/document ids -> the backend URL they actually point to, so
     // upload.getFile can serve real bytes for chat media, avatars and stories.
     private final java.util.concurrent.ConcurrentHashMap<Long, String> mediaUrlById = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean emojiPacksIndexed;
 
     // Backend history is page/limit based, not id-cursor based like Telegram's
     // real protocol - this tracks how many messages we've already handed out
@@ -1046,12 +1047,37 @@ public class RestBridge {
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getCustomEmojiDocuments) {
-                Vector<TLRPC.Document> docs = new Vector<>(TLRPC.Document::TLdeserialize);
-                for (Long id : ((TLRPC.TL_messages_getCustomEmojiDocuments) request).document_id) {
-                    String url = mediaUrlById.get(id);
-                    if (url != null) docs.objects.add(buildCustomEmojiDocument(url, null));
-                }
-                complete(onComplete, docs, null);
+                ArrayList<Long> wanted = ((TLRPC.TL_messages_getCustomEmojiDocuments) request).document_id;
+                executor.execute(() -> {
+                    // ids are made from the file's address; after a restart the app may not know an
+                    // emoji's address yet: read the emoji packs once, which makes the same ids again
+                    boolean missing = false;
+                    for (Long id : wanted) missing |= !mediaUrlById.containsKey(id);
+                    if (missing && !emojiPacksIndexed) {
+                        emojiPacksIndexed = true;
+                        try {
+                            JSONArray sets = requestArray("GET", "/stickers/sets", null, true);
+                            for (int i = 0; i < sets.length(); i++) {
+                                JSONObject js = sets.getJSONObject(i);
+                                if (!js.optBoolean("isEmoji", false)) continue;
+                                JSONArray stickers = requestArray("GET", "/stickers?setId=" + js.getString("_id"), null, true);
+                                for (int k = 0; k < stickers.length(); k++) {
+                                    String u = jsonStr(stickers.getJSONObject(k), "url");
+                                    if (u != null && !u.isEmpty()) idForUrl(absoluteUrl(u));
+                                }
+                            }
+                            savePeerMap("mediaMap", mediaUrlById);
+                        } catch (Exception e) {
+                            FileLog.e(e);
+                        }
+                    }
+                    Vector<TLRPC.Document> docs = new Vector<>(TLRPC.Document::TLdeserialize);
+                    for (Long id : wanted) {
+                        String url = mediaUrlById.get(id);
+                        if (url != null) docs.objects.add(buildCustomEmojiDocument(url, null));
+                    }
+                    complete(onComplete, docs, null);
+                });
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getFeaturedEmojiStickers) {
@@ -6109,6 +6135,62 @@ public class RestBridge {
             service.action = setWallpaper;
             return service;
         }
+        if ("system".equals(m.optString("type")) && action != null && "star_gift".equals(action.optString("type"))
+                && action.optString("giftId", "").length() == 24) {
+            // a gift, like Telegram's gift message: its picture on its backdrop, from the giver
+            TLRPC.TL_message base = buildTLMessage(m, peer);
+            TLRPC.TL_messageService service = new TLRPC.TL_messageService();
+            service.id = base.id;
+            service.date = base.date;
+            service.peer_id = base.peer_id;
+            service.dialog_id = base.dialog_id;
+            service.from_id = base.from_id;
+            service.out = base.out;
+            if (service.from_id != null) service.flags |= TLObject.FLAG_8;
+            JSONObject g = new JSONObject(action.toString());
+            g.put("_id", action.getString("giftId"));
+            String pic = g.optString("animationUrl", "");
+            String lower = pic.toLowerCase(Locale.US);
+            boolean lottie = lower.endsWith(".tgs") || lower.endsWith(".json");
+            if (!lottie && !g.optString("thumbnailUrl", "").isEmpty()) {
+                pic = g.optString("thumbnailUrl");
+                lower = pic.toLowerCase(Locale.US);
+            }
+            TL_stars.TL_starGift giftBase = new TL_stars.TL_starGift();
+            giftBase.id = idFromMongoId(action.getString("giftId"));
+            giftBase.title = g.optString("name", "Gift");
+            giftBase.stars = g.optLong("stars", 0);
+            giftBase.sticker = buildDocumentMedia(absoluteUrl(pic), lottie ? "application/x-tgsticker"
+                    : lower.endsWith(".png") ? "image/png" : "image/webp", lottie ? "gift.tgs" : "gift.webp", "sticker").document;
+            TLRPC.Peer owner = null;
+            String toChat = jsonStr(action, "toChat"), toUser = jsonStr(action, "toUser");
+            if (toChat != null && toChat.length() == 24) {
+                TLRPC.TL_peerChannel pc = new TLRPC.TL_peerChannel();
+                pc.channel_id = idFromMongoId(toChat);
+                owner = pc;
+            } else if (toUser != null && toUser.length() == 24) {
+                TLRPC.TL_peerUser pu = new TLRPC.TL_peerUser();
+                pu.user_id = idFromMongoId(toUser);
+                owner = pu;
+            }
+            TLRPC.TL_messageActionStarGiftUnique act = new TLRPC.TL_messageActionStarGiftUnique();
+            act.gift = collectibleGift(g, giftBase, owner, 1);
+            act.saved = true;
+            if (g.optBoolean("anonymous", false)) {
+                act.name_hidden = true;
+            } else if (base.from_id != null) {
+                act.from_id = base.from_id;
+            }
+            if (toChat != null && owner != null) act.peer = owner;
+            String caption = g.optString("caption", "");
+            if (!caption.isEmpty()) {
+                TLRPC.TL_textWithEntities text = new TLRPC.TL_textWithEntities();
+                text.text = caption;
+                act.message = text;
+            }
+            service.action = act;
+            return service;
+        }
         if ("system".equals(m.optString("type"))) {
             // Every other system message is a centered service message, never a text
             // "from" the user: joined / left like Telegram, anything else as a notice
@@ -6355,7 +6437,7 @@ public class RestBridge {
         TL_stories.TL_premium_boostsStatus status = new TL_stories.TL_premium_boostsStatus();
         long chatId = req.peer != null ? (req.peer.channel_id != 0 ? req.peer.channel_id : req.peer.chat_id) : 0;
         TLRPC.Chat chat = chatId != 0 ? org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(chatId) : null;
-        boolean unlocked = true; // no boosts on this server: colors, emoji status and wallpaper are open to admins
+        boolean unlocked = chat != null && chat.verified; // no boosts on this server: a blue tick unlocks colors, emoji status and wallpaper
         status.level = unlocked ? 10 : 0;
         status.current_level_boosts = unlocked ? 100 : 0;
         status.boosts = unlocked ? 100 : 0;
@@ -9606,15 +9688,17 @@ public class RestBridge {
     private void handleGetSavedStarGifts(TL_stars.getSavedStarGifts req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
+                // a group's / channel's gifts, or a user's
+                String chatConvId = req.peer instanceof TLRPC.TL_inputPeerChannel ? conversationIdByChatPeer.get(req.peer.channel_id) : null;
                 boolean self = req.peer instanceof TLRPC.TL_inputPeerSelf
                         || (selfMongoId != null && req.peer.user_id == idFromMongoId(selfMongoId));
-                String userMongoId = self ? selfMongoId : userMongoIdByTlId.get(req.peer.user_id);
-                if (userMongoId == null) {
+                String userMongoId = chatConvId != null ? null : self ? selfMongoId : userMongoIdByTlId.get(req.peer.user_id);
+                if ((userMongoId == null && chatConvId == null) || (req.offset != null && !req.offset.isEmpty())) {
                     complete(onComplete, new TL_stars.TL_payments_savedStarGifts(), null);
                     return;
                 }
 
-                JSONArray gifts = requestArray("GET", "/gifts/user/" + userMongoId, null, true);
+                JSONArray gifts = requestArray("GET", chatConvId != null ? "/gifts/chat/" + chatConvId : "/gifts/user/" + userMongoId, null, true);
                 TL_stars.TL_payments_savedStarGifts result = new TL_stars.TL_payments_savedStarGifts();
                 for (int i = 0; i < gifts.length(); i++) {
                     JSONObject g = gifts.getJSONObject(i);
@@ -9657,8 +9741,16 @@ public class RestBridge {
                     TL_stars.TL_savedStarGift saved = new TL_stars.TL_savedStarGift();
                     // Shown as a Telegram collectible: backdrop colors and a pattern around it,
                     // and its owner can wear it around their avatar
-                    TLRPC.TL_peerUser ownerPeer = new TLRPC.TL_peerUser();
-                    ownerPeer.user_id = idFromMongoId(userMongoId);
+                    TLRPC.Peer ownerPeer;
+                    if (chatConvId != null) {
+                        ownerPeer = new TLRPC.TL_peerChannel();
+                        ownerPeer.channel_id = req.peer.channel_id;
+                        saved.saved_id = idFromMongoIdInt32(g.getString("_id"));
+                        saved.flags |= 2048; // saved_id
+                    } else {
+                        ownerPeer = new TLRPC.TL_peerUser();
+                        ownerPeer.user_id = idFromMongoId(userMongoId);
+                    }
                     saved.gift = collectibleGift(g, starGift, ownerPeer, i + 1);
                     saved.date = parseIsoToEpochSeconds(g.optString("createdAt", null));
 
@@ -9718,11 +9810,14 @@ public class RestBridge {
         u.gift_id = base.id;
         u.title = base.title != null ? base.title : "Gift";
         u.slug = mongoId;
-        u.num = num;
-        u.owner_id = owner;
-        u.flags |= 1; // owner_id
-        u.availability_issued = 1;
-        u.availability_total = 1;
+        u.num = g.optInt("num", 0) > 0 ? g.optInt("num") : num;
+        if (owner != null) {
+            u.owner_id = owner;
+            u.flags |= 1; // owner_id
+        }
+        // the real numbers: how many of its kind were given, out of how many
+        u.availability_issued = Math.max(1, g.optInt("issued", 1));
+        u.availability_total = g.optInt("total", 0) > 0 ? g.optInt("total") : u.availability_issued;
         TL_stars.starGiftAttributeModel model = new TL_stars.starGiftAttributeModel();
         model.name = u.title;
         model.document = base.sticker;
@@ -9736,6 +9831,10 @@ public class RestBridge {
         pattern.rarity = rarity(10);
         u.attributes.add(pattern);
         int[] c = giftBackdrop(mongoId);
+        JSONObject chosen = g.optJSONObject("backdrop"); // colors picked when the gift was made
+        if (chosen != null && chosen.has("center") && chosen.has("edge")) {
+            c = new int[]{chosen.optInt("center"), chosen.optInt("edge"), chosen.optInt("pattern", chosen.optInt("edge")), chosen.optInt("text", 0xFFFFFF)};
+        }
         TL_stars.starGiftAttributeBackdrop backdrop = new TL_stars.starGiftAttributeBackdrop();
         backdrop.name = u.title;
         backdrop.backdrop_id = (int) (Math.abs(idFromMongoId(mongoId)) % GIFT_BACKDROPS.length) + 1;
@@ -10111,6 +10210,16 @@ public class RestBridge {
                 if (groupTheme != null && !groupTheme.isEmpty()) {
                     full.theme_emoticon = groupTheme;
                     full.flags |= TLObject.FLAG_27;
+                }
+                // the Gifts tab of a group / channel profile
+                try {
+                    int giftCount = requestArray("GET", "/gifts/chat/" + convId, null, true).length();
+                    if (giftCount > 0) {
+                        full.stargifts_count = giftCount;
+                        full.flags2 |= TLObject.FLAG_18;
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
                 }
                 full.read_inbox_max_id = 0;
                 full.read_outbox_max_id = 0;
