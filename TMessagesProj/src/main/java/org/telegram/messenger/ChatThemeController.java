@@ -351,7 +351,8 @@ public class ChatThemeController extends BaseController {
 
     public void saveChatWallpaper(long dialogId, TLRPC.WallPaper wallPaper) {
         if (wallPaper != null) {
-            if (wallPaper.document == null) {
+            // 7eve9chat: color / gradient / theme backgrounds have no file - keep them too
+            if (wallPaper.document == null && !(wallPaper instanceof TLRPC.TL_wallPaperNoFile)) {
                 return;
             }
             SerializedData data = new SerializedData(wallPaper.getObjectSize());

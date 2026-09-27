@@ -1342,9 +1342,7 @@ public class RestBridge {
             // Chat themes / Telegram's wallpaper catalogue don't exist on this backend:
             // empty lists (instead of an error) so the theme sheet shows no dead cells.
             if (request instanceof TL_account.getChatThemes) {
-                TL_account.TL_themes themes = new TL_account.TL_themes();
-                themes.hash = 1;
-                complete(onComplete, themes, null);
+                complete(onComplete, buildChatThemes(), null);
                 return true;
             }
             if (request instanceof TL_account.Tl_getUniqueGiftChatThemes) {
@@ -4080,6 +4078,12 @@ public class RestBridge {
     }
 
     private void putReplyTo(JSONObject body, TLRPC.InputReplyTo replyTo) throws Exception {
+        if (replyTo instanceof TLRPC.TL_inputReplyToStory) {
+            // a reply to a story: the recipient sees the story above it, like Telegram
+            String storyMongoId = storyMongoIdByTlId.get(replyTo.story_id);
+            if (storyMongoId != null) body.put("replyToStoryId", storyMongoId);
+            return;
+        }
         if (replyTo != null && replyTo.reply_to_msg_id != 0) {
             String replyMongoId = messageMongoIdByTlId.get(replyTo.reply_to_msg_id);
             if (replyMongoId != null) {
@@ -6154,6 +6158,53 @@ public class RestBridge {
                 if (file != null) file.delete();
             }
         });
+    }
+
+    // Telegram's chat themes (an emoji each, light + dark): colors only - the chat keeps its
+    // background. The app finds a chat's saved theme in this list by its emoji, so without
+    // it a theme set for both of us was lost on reopening the chat.
+    private static final Object[][] CHAT_THEMES = {
+            // emoji, accent, light bubbles, dark accent, dark bubbles
+            {"🏠", 0xFF3E88F7, new int[]{0xFF5AB0F4, 0xFF3D8EF0}, 0xFF3E88F7, new int[]{0xFF2D6FB5, 0xFF234E86}},
+            {"🐥", 0xFFF2A20F, new int[]{0xFFFFD35C, 0xFFF6B03C}, 0xFFF2A20F, new int[]{0xFF9C6B16, 0xFF7A5211}},
+            {"⛄", 0xFF3FB6C2, new int[]{0xFF8FE3E0, 0xFF5CC3D6}, 0xFF3FB6C2, new int[]{0xFF2E7D82, 0xFF1F5A63}},
+            {"💎", 0xFF8E6BE0, new int[]{0xFFB28CF2, 0xFF8C6CE6}, 0xFF9A7BEA, new int[]{0xFF5E43A8, 0xFF43307A}},
+            {"👨‍🏫", 0xFF3CAF74, new int[]{0xFF7FD69E, 0xFF4DBA7B}, 0xFF3CAF74, new int[]{0xFF2C7A4E, 0xFF1F5A39}},
+            {"🌷", 0xFFE06C9F, new int[]{0xFFF7A1C4, 0xFFEB7BAA}, 0xFFE06C9F, new int[]{0xFF9A3F68, 0xFF72304F}},
+            {"💜", 0xFFA65BD6, new int[]{0xFFD095F2, 0xFFAE6BE6}, 0xFFB26CE0, new int[]{0xFF6E3A96, 0xFF4F2A6C}},
+            {"🎄", 0xFFD65245, new int[]{0xFFF28A7A, 0xFFE0604F}, 0xFFD65245, new int[]{0xFF8E332A, 0xFF6A261F}},
+            {"🎮", 0xFFF07B2A, new int[]{0xFFFFAA6A, 0xFFF4863E}, 0xFFF07B2A, new int[]{0xFFA24F17, 0xFF7A3B11}},
+    };
+
+    private TL_account.TL_themes buildChatThemes() {
+        TL_account.TL_themes themes = new TL_account.TL_themes();
+        themes.hash = 7979 + CHAT_THEMES.length;
+        for (int i = 0; i < CHAT_THEMES.length; i++) {
+            Object[] t = CHAT_THEMES[i];
+            TLRPC.TL_theme theme = new TLRPC.TL_theme();
+            theme.id = 0x7e9c7000L + i;
+            theme.access_hash = theme.id;
+            theme.slug = "sevennine-" + i;
+            theme.title = (String) t[0];
+            theme.emoticon = (String) t[0];
+            theme.for_chat = true;
+            theme.flags |= TLObject.FLAG_3 | TLObject.FLAG_6; // settings + emoticon
+            theme.settings.add(themeSettings(new TLRPC.TL_baseThemeClassic(), (int) t[1], (int[]) t[2]));
+            theme.settings.add(themeSettings(new TLRPC.TL_baseThemeNight(), (int) t[3], (int[]) t[4]));
+            themes.themes.add(theme);
+        }
+        return themes;
+    }
+
+    private static TLRPC.TL_themeSettings themeSettings(TLRPC.BaseTheme base, int accent, int[] bubbles) {
+        TLRPC.TL_themeSettings st = new TLRPC.TL_themeSettings();
+        st.base_theme = base;
+        st.accent_color = accent;
+        st.outbox_accent_color = accent;
+        st.flags |= TLObject.FLAG_3;
+        for (int c : bubbles) st.message_colors.add(c);
+        st.flags |= TLObject.FLAG_0;
+        return st;
     }
 
     // Chat theme: saved on the server for both people until someone changes it
@@ -10862,6 +10913,22 @@ public class RestBridge {
                 messageMongoIdByTlId.put(header.reply_to_top_id, threadRootId);
             }
             msg.reply_to = header;
+            msg.flags |= TLObject.FLAG_3;
+        }
+        // a reply to a story: Telegram's story header (the story's preview above the message)
+        Object storyRef = m.opt("replyToStoryId");
+        String storyId = storyRef instanceof JSONObject ? ((JSONObject) storyRef).optString("_id", "") : (storyRef instanceof String ? (String) storyRef : "");
+        if (msg.reply_to == null && storyId.length() == 24) {
+            String owner = storyRef instanceof JSONObject ? refId((JSONObject) storyRef, "user") : null;
+            TLRPC.TL_messageReplyStoryHeader sh = new TLRPC.TL_messageReplyStoryHeader();
+            sh.story_id = idFromMongoIdInt32(storyId);
+            storyMongoIdByTlId.put(sh.story_id, storyId);
+            TLRPC.TL_peerUser storyPeer = new TLRPC.TL_peerUser();
+            // whose story: from the story itself, else the other side of a private chat
+            storyPeer.user_id = owner != null && owner.length() == 24 ? idFromMongoId(owner)
+                    : (msg.out && peer.user_id != 0 ? peer.user_id : UserConfig.getInstance(currentAccount).getClientUserId());
+            sh.peer = storyPeer;
+            msg.reply_to = sh;
             msg.flags |= TLObject.FLAG_3;
         }
 
