@@ -1291,7 +1291,7 @@ public class StoryEntry {
                 info.volume = videoVolume;
                 info.muted = muted;
                 info.estimatedSize = (long) (params[0][AnimatedFileInfo.PARAM_NUM_AUDIO_FRAME_SIZE] + params[0][AnimatedFileInfo.PARAM_NUM_DURATION] / 1000.0f * encoderBitrate / 8);
-                info.estimatedSize = Math.max(file.length(), info.estimatedSize);
+                info.estimatedSize = Math.max(file != null ? file.length() : 0, info.estimatedSize);
                 info.filterState = filterState;
                 info.blurPath = paintBlurFile == null ? null : paintBlurFile.getPath();
             } else {

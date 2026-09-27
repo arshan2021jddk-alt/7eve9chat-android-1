@@ -490,11 +490,13 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
         Drawable drawable;
         if (settingsIndex >= 0) {
             TLRPC.ThemeSettings themeSettings = theme.getThemeSettings(settingsIndex);
-            TLRPC.WallPaperSettings wallPaperSettings = themeSettings.wallpaper.settings;
-            color1 = wallPaperSettings.background_color;
-            color2 = wallPaperSettings.second_background_color;
-            color3 = wallPaperSettings.third_background_color;
-            color4 = wallPaperSettings.fourth_background_color;
+            TLRPC.WallPaperSettings wallPaperSettings = themeSettings != null && themeSettings.wallpaper != null ? themeSettings.wallpaper.settings : null;
+            if (wallPaperSettings != null) {
+                color1 = wallPaperSettings.background_color;
+                color2 = wallPaperSettings.second_background_color;
+                color3 = wallPaperSettings.third_background_color;
+                color4 = wallPaperSettings.fourth_background_color;
+            }
         }
         if (color2 != 0) {
             MotionBackgroundDrawable motionBackgroundDrawable = new MotionBackgroundDrawable(color1, color2, color3, color4, true);

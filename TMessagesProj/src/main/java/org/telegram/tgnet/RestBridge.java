@@ -6278,6 +6278,15 @@ public class RestBridge {
         return themes;
     }
 
+    private static int mixColor(int color, int to, float amount) {
+        int out = 0;
+        for (int shift = 16; shift >= 0; shift -= 8) {
+            int a = (color >> shift) & 0xFF, b = (to >> shift) & 0xFF;
+            out |= Math.round(a + (b - a) * amount) << shift;
+        }
+        return out;
+    }
+
     private static TLRPC.TL_themeSettings themeSettings(TLRPC.BaseTheme base, int accent, int[] bubbles) {
         TLRPC.TL_themeSettings st = new TLRPC.TL_themeSettings();
         st.base_theme = base;
@@ -6286,6 +6295,23 @@ public class RestBridge {
         st.flags |= TLObject.FLAG_3;
         for (int c : bubbles) st.message_colors.add(c);
         st.flags |= TLObject.FLAG_0;
+        // the chat background: a gradient in the theme's colors (theme previews and chats read it)
+        boolean dark = base instanceof TLRPC.TL_baseThemeNight;
+        int tone = dark ? 0x000000 : 0xFFFFFF;
+        float amount = dark ? 0.55f : 0.6f;
+        TLRPC.TL_wallPaperNoFile wp = new TLRPC.TL_wallPaperNoFile();
+        wp.id = 0x7e9c7100L + (accent & 0xFFFFFF) + (dark ? 1 : 0);
+        wp.dark = dark;
+        TLRPC.TL_wallPaperSettings ws = new TLRPC.TL_wallPaperSettings();
+        ws.background_color = mixColor(bubbles[0], tone, amount);
+        ws.second_background_color = mixColor(bubbles[1], tone, amount - 0.15f);
+        ws.third_background_color = mixColor(bubbles[0], tone, amount + 0.1f);
+        ws.fourth_background_color = mixColor(bubbles[1], tone, amount);
+        ws.flags |= 1 | 16 | 32 | 64;
+        wp.settings = ws;
+        wp.flags |= 4;
+        st.wallpaper = wp;
+        st.flags |= TLObject.FLAG_1;
         return st;
     }
 
