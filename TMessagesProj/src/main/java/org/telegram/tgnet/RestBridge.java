@@ -1376,6 +1376,40 @@ public class RestBridge {
                 handleSimpleConversationCall(req.channel.channel_id, "PUT", "/emoji-status", body, new TLRPC.TL_updates(), onComplete);
                 return true;
             }
+            if (request instanceof TL_stars.getUniqueStarGift) {
+                // tapping a worn gift: the gift by its slug (= its id here)
+                String slug = ((TL_stars.getUniqueStarGift) request).slug;
+                executor.execute(() -> {
+                    try {
+                        if (slug == null || !slug.matches("[0-9a-fA-F]{24}")) {
+                            complete(onComplete, null, tlError(400, "STARGIFT_SLUG_INVALID"));
+                            return;
+                        }
+                        JSONObject g = request("GET", "/gifts/" + slug, null, true);
+                        String pic = g.optString("animationUrl", "");
+                        String lower = pic.toLowerCase(Locale.US);
+                        boolean lottie = lower.endsWith(".tgs") || lower.endsWith(".json");
+                        if (!lottie) {
+                            pic = g.optString("thumbnailUrl", "");
+                            lower = pic.toLowerCase(Locale.US);
+                        }
+                        TL_stars.TL_starGift base = new TL_stars.TL_starGift();
+                        base.id = idFromMongoId(slug);
+                        base.title = g.optString("name", "Gift");
+                        base.sticker = buildDocumentMedia(absoluteUrl(pic), lottie ? "application/x-tgsticker"
+                                : lower.endsWith(".png") ? "image/png" : "image/webp", lottie ? "gift.tgs" : "gift.webp", "sticker").document;
+                        TL_stars.TL_payments_uniqueStarGift res = new TL_stars.TL_payments_uniqueStarGift();
+                        TLRPC.TL_peerUser owner = new TLRPC.TL_peerUser();
+                        String ownerId = refId(g, "owner");
+                        owner.user_id = ownerId != null ? idFromMongoId(ownerId) : 0;
+                        res.gift = collectibleGift(g, base, owner, 1);
+                        complete(onComplete, res, null);
+                    } catch (Exception e) {
+                        complete(onComplete, null, tlError(400, "STARGIFT_SLUG_INVALID"));
+                    }
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_setChatTheme) {
                 handleSetChatTheme((TLRPC.TL_messages_setChatTheme) request, onComplete);
                 return true;
@@ -5995,7 +6029,11 @@ public class RestBridge {
                 JSONObject body = new JSONObject();
                 body.put("forProfile", forProfile);
                 body.put("color", hasColor ? color : -1);
-                if (backgroundEmojiId != 0) body.put("backgroundEmojiId", Long.toString(backgroundEmojiId));
+                if (backgroundEmojiId != 0) {
+                    body.put("backgroundEmojiId", Long.toString(backgroundEmojiId));
+                    String bgPath = relativeUploadPath(mediaUrlById.get(backgroundEmojiId));
+                    if (bgPath != null) body.put("backgroundEmojiUrl", bgPath);
+                }
                 if (conversationId != null) {
                     request("PUT", "/conversations/" + conversationId + "/appearance", body, true);
                     complete(onComplete, chatUpdates(conversationId), null);
@@ -6028,11 +6066,18 @@ public class RestBridge {
         complete(onComplete, status, null);
     }
 
-    private static TLRPC.PeerColor peerColorFromJson(JSONObject j) {
+    private TLRPC.PeerColor peerColorFromJson(JSONObject j) {
         if (j == null || !j.has("color")) return null;
         TLRPC.TL_peerColor c = new TLRPC.TL_peerColor();
         c.color = j.optInt("color", 0);
         c.flags |= TLObject.FLAG_0;
+        // reply / profile icons: stored by the emoji's file so every device can show them
+        String bgUrl = jsonStr(j, "backgroundEmojiUrl");
+        if (bgUrl != null && bgUrl.startsWith("/uploads/")) {
+            c.background_emoji_id = idForUrl(absoluteUrl(bgUrl));
+            c.flags |= TLObject.FLAG_1;
+            return c;
+        }
         String bg = jsonStr(j, "backgroundEmojiId");
         if (bg != null) {
             try {
@@ -8499,6 +8544,22 @@ public class RestBridge {
     private void handleUpdateEmojiStatus(TL_account.updateEmojiStatus req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
+                if (req.emoji_status instanceof TLRPC.TL_inputEmojiStatusCollectible) {
+                    String giftId = giftMongoIdByTlId.get(((TLRPC.TL_inputEmojiStatusCollectible) req.emoji_status).collectible_id);
+                    if (giftId == null) {
+                        complete(onComplete, null, tlError(400, "STARGIFT_INVALID"));
+                        return;
+                    }
+                    int[] c = giftBackdrop(giftId);
+                    JSONObject wear = new JSONObject();
+                    wear.put("center", c[0]);
+                    wear.put("edge", c[1]);
+                    wear.put("pattern", c[2]);
+                    wear.put("text", c[3]);
+                    request("POST", "/gifts/" + giftId + "/wear", wear, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                    return;
+                }
                 JSONObject body = new JSONObject();
                 Long docId = org.telegram.messenger.UserObject.getEmojiStatusDocumentId(req.emoji_status);
                 String path = docId != null ? relativeUploadPath(mediaUrlById.get(docId)) : null;
@@ -9293,7 +9354,11 @@ public class RestBridge {
                     }
 
                     TL_stars.TL_savedStarGift saved = new TL_stars.TL_savedStarGift();
-                    saved.gift = starGift;
+                    // Shown as a Telegram collectible: backdrop colors and a pattern around it,
+                    // and its owner can wear it around their avatar
+                    TLRPC.TL_peerUser ownerPeer = new TLRPC.TL_peerUser();
+                    ownerPeer.user_id = idFromMongoId(userMongoId);
+                    saved.gift = collectibleGift(g, starGift, ownerPeer, i + 1);
                     saved.date = parseIsoToEpochSeconds(g.optString("createdAt", null));
 
                     boolean anonymous = g.optBoolean("isAnonymous", false);
@@ -9323,6 +9388,83 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             }
         });
+    }
+
+    // Backdrops for gifts shown as collectibles: {center, edge, pattern, text}
+    private static final int[][] GIFT_BACKDROPS = {
+            {0x5B8BD1, 0x3D6AA8, 0x284F84, 0xFFFFFF}, {0xC76B9B, 0x9C4478, 0x6D2653, 0xFFFFFF},
+            {0x6EC07A, 0x3F9152, 0x236335, 0xFFFFFF}, {0xD9A441, 0xB07A22, 0x7E5410, 0xFFFFFF},
+            {0x8F76D6, 0x6A52B3, 0x46338A, 0xFFFFFF}, {0xD96B5F, 0xB04A3F, 0x7F2C24, 0xFFFFFF},
+            {0x4FB0B8, 0x2F8A92, 0x1B6168, 0xFFFFFF}, {0x7A8691, 0x56626C, 0x39434B, 0xFFFFFF},
+    };
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> giftMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    static int[] giftBackdrop(String giftMongoId) {
+        return GIFT_BACKDROPS[(int) (Math.abs(idFromMongoId(giftMongoId)) % GIFT_BACKDROPS.length)];
+    }
+
+    private static TL_stars.TL_starGiftAttributeRarity rarity(int permille) {
+        TL_stars.TL_starGiftAttributeRarity r = new TL_stars.TL_starGiftAttributeRarity();
+        r.permille = permille;
+        return r;
+    }
+
+    private TL_stars.StarGift collectibleGift(JSONObject g, TL_stars.TL_starGift base, TLRPC.Peer owner, int num) {
+        String mongoId = g.optString("_id", "");
+        giftMongoIdByTlId.put(base.id, mongoId);
+        TL_stars.TL_starGiftUnique u = new TL_stars.TL_starGiftUnique();
+        u.id = base.id;
+        u.gift_id = base.id;
+        u.title = base.title != null ? base.title : "Gift";
+        u.slug = mongoId;
+        u.num = num;
+        u.owner_id = owner;
+        u.flags |= 1; // owner_id
+        u.availability_issued = 1;
+        u.availability_total = 1;
+        TL_stars.starGiftAttributeModel model = new TL_stars.starGiftAttributeModel();
+        model.name = u.title;
+        model.document = base.sticker;
+        model.rarity = rarity(10);
+        u.attributes.add(model);
+        String patternUrl = g.optString("thumbnailUrl", "");
+        TL_stars.starGiftAttributePattern pattern = new TL_stars.starGiftAttributePattern();
+        pattern.name = u.title;
+        pattern.document = patternUrl.startsWith("/uploads/")
+                ? buildDocumentMedia(absoluteUrl(patternUrl), "image/webp", "pattern.webp", "sticker").document : base.sticker;
+        pattern.rarity = rarity(10);
+        u.attributes.add(pattern);
+        int[] c = giftBackdrop(mongoId);
+        TL_stars.starGiftAttributeBackdrop backdrop = new TL_stars.starGiftAttributeBackdrop();
+        backdrop.name = u.title;
+        backdrop.backdrop_id = (int) (Math.abs(idFromMongoId(mongoId)) % GIFT_BACKDROPS.length) + 1;
+        backdrop.center_color = c[0];
+        backdrop.edge_color = c[1];
+        backdrop.pattern_color = c[2];
+        backdrop.text_color = c[3];
+        backdrop.rarity = rarity(10);
+        u.attributes.add(backdrop);
+        return u;
+    }
+
+    // A worn gift (user.emojiStatus.collectible) -> Telegram's collectible status
+    private TLRPC.EmojiStatus collectibleStatus(JSONObject collectible) {
+        String modelUrl = jsonStr(collectible, "modelUrl");
+        String giftId = jsonStr(collectible, "giftId");
+        if (modelUrl == null || giftId == null || giftId.length() != 24) return null;
+        TLRPC.TL_emojiStatusCollectible st = new TLRPC.TL_emojiStatusCollectible();
+        st.collectible_id = idFromMongoId(giftId);
+        giftMongoIdByTlId.put(st.collectible_id, giftId);
+        st.document_id = idForUrl(absoluteUrl(modelUrl));
+        String patternUrl = jsonStr(collectible, "patternUrl");
+        st.pattern_document_id = idForUrl(absoluteUrl(patternUrl != null ? patternUrl : modelUrl));
+        st.title = collectible.optString("title", "Gift");
+        st.slug = collectible.optString("slug", giftId);
+        st.center_color = collectible.optInt("center", 0x5B8BD1);
+        st.edge_color = collectible.optInt("edge", 0x3D6AA8);
+        st.pattern_color = collectible.optInt("pattern", 0x284F84);
+        st.text_color = collectible.optInt("text", 0xFFFFFF);
+        return st;
     }
 
     // ---------------------------------------------------------------
@@ -11722,7 +11864,12 @@ public class RestBridge {
 
         JSONObject emojiStatus = u.optJSONObject("emojiStatus");
         String emojiUrl = emojiStatus != null ? jsonStr(emojiStatus, "url") : null;
-        if (emojiUrl != null && !emojiUrl.isEmpty()) {
+        TLRPC.EmojiStatus worn = emojiStatus != null && emojiStatus.optJSONObject("collectible") != null
+                ? collectibleStatus(emojiStatus.optJSONObject("collectible")) : null;
+        if (worn != null) {
+            user.emoji_status = worn; // a worn gift: around the avatar, in its colors
+            user.flags |= TLObject.FLAG_30;
+        } else if (emojiUrl != null && !emojiUrl.isEmpty()) {
             TLRPC.TL_emojiStatus status = new TLRPC.TL_emojiStatus();
             status.document_id = idForUrl(absoluteUrl(emojiUrl));
             int until = emojiStatus.optInt("until", 0);
