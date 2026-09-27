@@ -9997,6 +9997,9 @@ public class RestBridge {
                 try {
                     request("DELETE", "/auth/me", null, true);
                     complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (RestException e) {
+                    // two-step verification: deleting needs the code page (7eve9craft.ir/deactivate)
+                    complete(onComplete, null, tlError(e.statusCode, e.message != null && e.message.contains("PASSWORD_REQUIRED") ? "PASSWORD_REQUIRED" : "DELETE_FAILED"));
                 } catch (Exception e) {
                     FileLog.e(e);
                     complete(onComplete, null, genericError(e));

