@@ -2286,14 +2286,6 @@ public class RestBridge {
     // ---------------------------------------------------------------
     private volatile String pendingLoginTicket;
 
-    private static String b64(byte[] b) {
-        return android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP);
-    }
-
-    private static byte[] unb64(String s) {
-        return s == null || s.isEmpty() ? new byte[0] : android.util.Base64.decode(s, android.util.Base64.DEFAULT);
-    }
-
     private static TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow srpAlgo(JSONObject i, String salt1, String salt2) {
         TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow algo = new TLRPC.TL_passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow();
         algo.salt1 = unb64(i.optString(salt1));
