@@ -622,6 +622,69 @@ public class RestBridge {
                 handleSignIn((TLRPC.TL_auth_signIn) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_getCommonChats) {
+                TLRPC.TL_messages_getCommonChats req = (TLRPC.TL_messages_getCommonChats) request;
+                executor.execute(() -> {
+                    TLRPC.TL_messages_chats res = new TLRPC.TL_messages_chats();
+                    try {
+                        String userMongoId = userMongoIdByTlId.get(req.user_id.user_id);
+                        if (userMongoId != null && req.max_id == 0) {
+                            JSONArray chats = requestArray("GET", "/conversations/common/" + userMongoId, null, true);
+                            for (int i = 0; i < chats.length() && i < Math.max(req.limit, 1); i++) {
+                                JSONObject conv = chats.getJSONObject(i);
+                                long tlId = idFromMongoId(conv.getString("_id"));
+                                conversationIdByChatPeer.put(tlId, conv.getString("_id"));
+                                res.chats.add(buildTLChannel(conv, tlId));
+                            }
+                        }
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    complete(onComplete, res, null);
+                });
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getPeerDialogs) {
+                // the dialogs of some chats (a chat opened before the list has it, pinned
+                // chats, notifications): picked out of the dialog list, archive included
+                final java.util.Set<Long> wanted = new java.util.HashSet<>();
+                long selfTlId = org.telegram.messenger.UserConfig.getInstance(currentAccount).getClientUserId();
+                for (TLRPC.InputDialogPeer p : ((TLRPC.TL_messages_getPeerDialogs) request).peers) {
+                    if (!(p instanceof TLRPC.TL_inputDialogPeer)) continue;
+                    TLRPC.InputPeer ip = ((TLRPC.TL_inputDialogPeer) p).peer;
+                    if (ip instanceof TLRPC.TL_inputPeerSelf) wanted.add(selfTlId);
+                    else if (ip.user_id != 0) wanted.add(ip.user_id);
+                    else if (ip.channel_id != 0) wanted.add(-ip.channel_id);
+                    else if (ip.chat_id != 0) wanted.add(-ip.chat_id);
+                }
+                final TLRPC.TL_messages_peerDialogs out = new TLRPC.TL_messages_peerDialogs();
+                out.state = new TLRPC.TL_updates_state();
+                out.state.date = (int) (System.currentTimeMillis() / 1000L);
+                final int[] left = {2};
+                RequestDelegate collect = (resp, err) -> {
+                    synchronized (out) {
+                        if (resp instanceof TLRPC.messages_Dialogs) {
+                            TLRPC.messages_Dialogs d = (TLRPC.messages_Dialogs) resp;
+                            for (TLRPC.Dialog dialog : d.dialogs) {
+                                if (!(dialog instanceof TLRPC.TL_dialogFolder) && wanted.contains(dialog.id)) out.dialogs.add(dialog);
+                            }
+                            for (TLRPC.Message m : d.messages) {
+                                if (wanted.contains(org.telegram.messenger.MessageObject.getDialogId(m))) out.messages.add(m);
+                            }
+                            out.chats.addAll(d.chats);
+                            out.users.addAll(d.users);
+                        }
+                        if (--left[0] == 0) onComplete.run(out, null);
+                    }
+                };
+                for (int folder = 0; folder <= 1; folder++) {
+                    TLRPC.TL_messages_getDialogs all = new TLRPC.TL_messages_getDialogs();
+                    all.folder_id = folder;
+                    all.offset_peer = new TLRPC.TL_inputPeerEmpty();
+                    handleGetDialogs(all, collect);
+                }
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_getDialogs) {
                 handleGetDialogs((TLRPC.TL_messages_getDialogs) request, onComplete);
                 return true;
@@ -5166,6 +5229,13 @@ public class RestBridge {
                 full.settings = new TLRPC.TL_peerSettings();
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.common_chats_count = 0;
+                if (!self) {
+                    try { // "Groups in common" on the profile
+                        full.common_chats_count = request("GET", "/conversations/common/" + userJson.getString("_id") + "?count=1", null, true).optInt("count", 0);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                }
                 full.display_gifts_button = false;
                 full.stories_pinned_available = true;
                 // Voice/video calls: Telegram's own call screens (see "Calls")
