@@ -65,8 +65,10 @@ android {
 
     buildTypes {
         debug {
-            debuggable true
-            jniDebuggable true
+            // 7eve9chat: this is the build users install - not debuggable, so a phone on USB
+            // can't be used to read the app's private data (login token, messages)
+            debuggable false
+            jniDebuggable false
             signingConfig signingConfigs.debug
             applicationIdSuffix ".beta"
             minifyEnabled false
