@@ -5366,7 +5366,8 @@ public class RestBridge {
                         : peerChatFromInput(req.to_peer);
 
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
-                for (int tlId : req.id) {
+                for (int idx = 0; idx < req.id.size(); idx++) {
+                    int tlId = req.id.get(idx);
                     String messageMongoId = messageMongoIdByTlId.get(tlId);
                     if (messageMongoId == null) {
                         continue;
@@ -5375,13 +5376,18 @@ public class RestBridge {
                     body.put("conversationId", toConversationId);
                     body.put("messageId", messageMongoId);
                     JSONObject forwarded = request("POST", "/messages/forward", body, true);
+                    rememberMessageId(forwarded.getString("_id")); // the socket echo is ours - not a second copy
 
                     TLRPC.TL_message tlMessage = buildTLMessage(forwarded, destPeer);
-                    TL_update.TL_updateNewMessage update = new TL_update.TL_updateNewMessage();
-                    update.message = tlMessage;
-                    update.pts = 0;
-                    update.pts_count = 0;
-                    updates.updates.add(update);
+                    if (idx < req.random_id.size()) {
+                        // which pending message this is - without it the app keeps the forward
+                        // as unsent and sends it again (the recipient got it 2-3 times)
+                        TL_update.TL_updateMessageID mid = new TL_update.TL_updateMessageID();
+                        mid.id = tlMessage.id;
+                        mid.random_id = req.random_id.get(idx);
+                        updates.updates.add(mid);
+                    }
+                    updates.updates.add(newMessageUpdateFor(tlMessage)); // channel / group / private
                     updates.date = tlMessage.date;
                 }
                 complete(onComplete, updates, null);
