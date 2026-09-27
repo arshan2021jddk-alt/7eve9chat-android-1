@@ -2394,6 +2394,31 @@ public class RestBridge {
             });
             return true;
         }
+        if (request instanceof TLRPC.TL_auth_acceptLoginToken) {
+            // "Link Desktop Device": this phone signs a web / desktop in by its QR code
+            byte[] token = ((TLRPC.TL_auth_acceptLoginToken) request).token;
+            executor.execute(() -> {
+                try {
+                    String t = android.util.Base64.encodeToString(token, android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
+                    JSONObject r = request("POST", "/auth/login-token/accept", new JSONObject().put("token", t), true);
+                    TLRPC.TL_authorization auth = new TLRPC.TL_authorization();
+                    auth.device_model = r.optString("deviceModel", "Web");
+                    auth.platform = "Web";
+                    auth.system_version = "";
+                    auth.app_name = "7eve9Chat Web";
+                    auth.app_version = "";
+                    auth.ip = r.optString("ip", "");
+                    auth.country = "";
+                    auth.region = "";
+                    auth.date_created = auth.date_active = (int) (System.currentTimeMillis() / 1000L);
+                    complete(onComplete, auth, null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, null, tlError(400, "AUTH_TOKEN_INVALID"));
+                }
+            });
+            return true;
+        }
         if (request instanceof TLRPC.TL_auth_requestPasswordRecovery) {
             // no recovery email on this server
             complete(onComplete, null, tlError(400, "PASSWORD_RECOVERY_NA"));
