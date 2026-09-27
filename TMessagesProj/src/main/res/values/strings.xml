@@ -3675,9 +3675,7 @@
     <string name="SecurityTitle">Security</string>
     <string name="DeleteAccountTitle">Account self-destruct</string>
     <string name="DeleteAccountNow">Delete account now</string>
-    <string name="DeleteAccountNowConfirm">Your name, phone number, username, photos, stories, gifts and sessions will be deleted and you will appear as **Deleted Account** to others. Messages you sent stay in other people's chats.
-
-This cannot be undone.</string>
+    <string name="DeleteAccountNowConfirm">Your name, phone number, username, photos, stories, gifts and sessions will be deleted and you will appear as **Deleted Account** to others. Messages you sent stay in other people\'s chats.\n\nThis cannot be undone.</string>
     <string name="DeleteAccountNowButton">Delete my account</string>
     <string name="NewChatsFromNonContacts">New chats from unknown users</string>
     <string name="ArchiveAndMute">Archive and Mute</string>
