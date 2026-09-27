@@ -1410,6 +1410,25 @@ public class RestBridge {
                 });
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_searchCustomEmoji) {
+                // premium emoji for a normal emoji (the suggestions over the keyboard)
+                String emoticon = ((TLRPC.TL_messages_searchCustomEmoji) request).emoticon;
+                executor.execute(() -> {
+                    TLRPC.TL_emojiList list = new TLRPC.TL_emojiList();
+                    try {
+                        JSONArray urls = request("GET", "/stickers/emoji-search?emoticon=" + java.net.URLEncoder.encode(emoticon == null ? "" : emoticon, "UTF-8"), null, true).optJSONArray("urls");
+                        for (int i = 0; urls != null && i < urls.length(); i++) {
+                            list.document_id.add(idForUrl(absoluteUrl(urls.getString(i))));
+                        }
+                        savePeerMap("mediaMap", mediaUrlById);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    list.hash = list.document_id.size();
+                    complete(onComplete, list, null);
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_setChatTheme) {
                 handleSetChatTheme((TLRPC.TL_messages_setChatTheme) request, onComplete);
                 return true;
@@ -5401,10 +5420,62 @@ public class RestBridge {
     // ---------------------------------------------------------------
     // messages.getStickerSet -> GET /stickers?setId=...
     // ---------------------------------------------------------------
+    // Telegram's animated emoji: a message that is one emoji plays its animation (the
+    // app looks it up by emoticon in this set's packs)
+    private static final long ANIMATED_EMOJI_SET_ID = 0x7e9ae0001L;
+
+    private void handleGetAnimatedEmojiSet(RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONArray list = requestArray("GET", "/stickers/animated-emoji", null, true);
+                TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                set.id = ANIMATED_EMOJI_SET_ID;
+                set.access_hash = 1;
+                set.title = "Animated Emoji";
+                set.short_name = "AnimatedEmojies";
+
+                TLRPC.TL_messages_stickerSet result = new TLRPC.TL_messages_stickerSet();
+                result.set = set;
+                TLRPC.TL_inputStickerSetID input = new TLRPC.TL_inputStickerSetID();
+                input.id = set.id;
+                input.access_hash = set.access_hash;
+                for (int i = 0; i < list.length(); i++) {
+                    JSONObject o = list.getJSONObject(i);
+                    String emoji = o.optString("emoji", "").replace("\uFE0F", "");
+                    String url = o.optString("url", "");
+                    if (emoji.isEmpty() || !url.startsWith("/uploads/")) continue;
+                    TLRPC.Document doc = buildDocumentMedia(absoluteUrl(url), "application/x-tgsticker", "AnimatedSticker.tgs", "sticker").document;
+                    for (TLRPC.DocumentAttribute a : doc.attributes) {
+                        if (a instanceof TLRPC.TL_documentAttributeSticker) {
+                            a.alt = emoji;
+                            a.stickerset = input;
+                        }
+                    }
+                    result.documents.add(doc);
+                    TLRPC.TL_stickerPack pack = new TLRPC.TL_stickerPack();
+                    pack.emoticon = emoji;
+                    pack.documents.add(doc.id);
+                    result.packs.add(pack);
+                }
+                set.count = result.documents.size();
+                savePeerMap("mediaMap", mediaUrlById);
+                complete(onComplete, result, null);
+            } catch (Exception e) {
+                FileLog.e(e);
+                complete(onComplete, null, tlError(400, "STICKERSET_INVALID"));
+            }
+        });
+    }
+
     private void handleGetStickerSet(TLRPC.TL_messages_getStickerSet req, RequestDelegate onComplete) {
+        if (req.stickerset instanceof TLRPC.TL_inputStickerSetAnimatedEmoji) {
+            handleGetAnimatedEmojiSet(onComplete);
+            return;
+        }
         executor.execute(() -> {
             try {
                 long setTlId = req.stickerset.id;
+                if ((setTlId & 0x4000000000000000L) != 0) emojiSetIds.add(setTlId); // an emoji pack id (see handleGetEmojiSets)
                 String mongoSetId = stickerSetMongoIdById.get(setTlId);
                 JSONArray stickers = null;
                 if (mongoSetId == null && req.stickerset instanceof TLRPC.TL_inputStickerSetShortName) {
@@ -6234,6 +6305,7 @@ public class RestBridge {
                 body.put("title", req.title);
                 body.put("shortName", shortName);
                 body.put("isPublic", true);
+                if (req.emojis) body.put("isEmoji", true); // "create emoji pack"
                 JSONObject set = request("POST", "/stickers/sets", body, true);
                 String setMongoId = set.getString("_id");
                 addStickerItems(setMongoId, req.stickers);
@@ -6297,7 +6369,7 @@ public class RestBridge {
         }
         TLRPC.TL_documentAttributeCustomEmoji emoji = new TLRPC.TL_documentAttributeCustomEmoji();
         emoji.alt = "🙂";
-        emoji.free = true;
+        emoji.free = false; // Telegram: custom emoji are Premium to send; everyone sees them
         if (set != null) {
             TLRPC.TL_inputStickerSetID inputSet = new TLRPC.TL_inputStickerSetID();
             inputSet.id = set.id;
@@ -6317,6 +6389,7 @@ public class RestBridge {
                 JSONArray sets = requestArray("GET", "/stickers/sets", null, true);
                 for (int i = 0; i < sets.length(); i++) {
                     JSONObject js = sets.getJSONObject(i);
+                    if (!js.optBoolean("isEmoji", false)) continue; // like Telegram: emoji packs only, stickers stay stickers
                     String mongoId = js.getString("_id");
                     long tlId = idFromMongoId(mongoId) ^ 0x4000000000000000L; // separate id from the sticker version
                     stickerSetMongoIdById.put(tlId, mongoId);
@@ -9765,7 +9838,7 @@ public class RestBridge {
                 full.stories_pinned_available = true;
                 full.hidden_prehistory = conv.optBoolean("hiddenPrehistory", false);
                 full.participants_hidden = conv.optBoolean("participantsHidden", false);
-                full.can_view_participants = isAdmin || !full.participants_hidden;
+                full.can_view_participants = isAdmin || (!full.participants_hidden && !"channel".equals(conv.optString("type"))); // subscribers: admins only
                 full.available_reactions = availableReactionsFor(conv);
                 TLRPC.TL_inputGroupCall activeCall = activeGroupCall(conv);
                 if (activeCall != null) {
@@ -9775,7 +9848,7 @@ public class RestBridge {
                 full.flags |= TLObject.FLAG_30;
                 JSONArray participantsJson = conv.optJSONArray("participants");
                 if (participantsJson != null) {
-                    full.participants_count = participantsJson.length();
+                    full.participants_count = conv.has("participantsCount") ? conv.optInt("participantsCount") : participantsJson.length();
                     full.flags |= TLObject.FLAG_0;
                 }
                 JSONArray admins = conv.optJSONArray("admins");
@@ -11627,7 +11700,8 @@ public class RestBridge {
 
         JSONArray participants = conv.optJSONArray("participants");
         if (participants != null) {
-            channel.participants_count = participants.length();
+            // non-admins of a channel get only themselves in the list and the real count
+            channel.participants_count = conv.has("participantsCount") ? conv.optInt("participantsCount") : participants.length();
             channel.flags |= TLObject.FLAG_17; // participants_count present
             boolean member = false;
             for (int i = 0; i < participants.length() && selfMongoId != null; i++) {
