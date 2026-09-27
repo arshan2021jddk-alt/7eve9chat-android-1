@@ -609,6 +609,9 @@ public class RestBridge {
             if (handlePasswordRequest(request, onComplete)) {
                 return true;
             }
+            if (handleScheduledRequest(request, onComplete)) {
+                return true;
+            }
             if (request instanceof TLRPC.TL_auth_sendCode) {
                 handleSendCode((TLRPC.TL_auth_sendCode) request, onComplete);
                 return true;
@@ -4477,7 +4480,12 @@ public class RestBridge {
         return sendOneMedia(peer, media, caption, replyTo, null);
     }
 
+    // the schedule date of the media being sent on this thread ("Schedule message")
+    private final ThreadLocal<Integer> sendScheduleDate = new ThreadLocal<>();
+
     private void putMediaOptions(JSONObject body, TLRPC.InputMedia media, ArrayList<TLRPC.MessageEntity> captionEntities) throws Exception {
+        Integer scheduleDate = sendScheduleDate.get();
+        if (scheduleDate != null && scheduleDate > 0) body.put("scheduleDate", scheduleDate);
         if (media.spoiler) body.put("hasSpoiler", true);
         if (media.ttl_seconds == 0x7FFFFFFF) {
             body.put("selfDestructTimer", "view_once");
@@ -4737,7 +4745,17 @@ public class RestBridge {
         }
         executor.execute(() -> {
             try {
-                JSONObject sent = sendOneMedia(req.peer, req.media, req.message, req.reply_to, req.entities);
+                sendScheduleDate.set(req.schedule_date);
+                JSONObject sent;
+                try {
+                    sent = sendOneMedia(req.peer, req.media, req.message, req.reply_to, req.entities);
+                } finally {
+                    sendScheduleDate.remove();
+                }
+                if (sent.optBoolean("scheduled", false)) {
+                    complete(onComplete, scheduledUpdates(new TLRPC.TL_updates(), sent, req.peer, req.random_id), null);
+                    return;
+                }
                 TLRPC.TL_message tlMessage = buildTLMessage(sent, peerFromInput(req.peer));
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 updates.updates.add(newMessageUpdateFor(tlMessage));
@@ -4763,7 +4781,17 @@ public class RestBridge {
                 TLRPC.Peer peer = peerFromInput(req.peer);
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 for (TLRPC.TL_inputSingleMedia single : req.multi_media) {
-                    JSONObject sent = sendOneMedia(req.peer, single.media, single.message, req.reply_to, single.entities);
+                    sendScheduleDate.set(req.schedule_date);
+                    JSONObject sent;
+                    try {
+                        sent = sendOneMedia(req.peer, single.media, single.message, req.reply_to, single.entities);
+                    } finally {
+                        sendScheduleDate.remove();
+                    }
+                    if (sent.optBoolean("scheduled", false)) {
+                        scheduledUpdates(updates, sent, req.peer, single.random_id);
+                        continue;
+                    }
                     TLRPC.TL_message tlMessage = buildTLMessage(sent, peer);
 
                     TL_update.TL_updateMessageID idUpdate = new TL_update.TL_updateMessageID();
@@ -4783,6 +4811,116 @@ public class RestBridge {
                 complete(onComplete, null, genericError(e));
             }
         });
+    }
+
+    // ---------------------------------------------------------------
+    // Scheduled messages ("Schedule message"): the server keeps them until their time
+    // ---------------------------------------------------------------
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> scheduledMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private TLRPC.TL_message buildScheduledMessage(JSONObject sent, TLRPC.Peer peer) throws Exception {
+        String sid = sent.getString("_id");
+        JSONObject m = new JSONObject(sent.toString());
+        m.put("sender", new JSONObject().put("_id", selfMongoId));
+        TLRPC.TL_message msg = buildTLMessage(m, peer);
+        msg.id = idFromMongoIdInt32(sid);
+        scheduledMongoIdByTlId.put(msg.id, sid);
+        msg.date = parseIsoToEpochSeconds(sent.optString("scheduledAt", null));
+        msg.out = true;
+        return msg;
+    }
+
+    private TLRPC.TL_updates scheduledUpdates(TLRPC.TL_updates updates, JSONObject sent, TLRPC.InputPeer inputPeer, long randomId) throws Exception {
+        TLRPC.TL_message msg = buildScheduledMessage(sent, peerFromInput(inputPeer));
+        TL_update.TL_updateMessageID idUpdate = new TL_update.TL_updateMessageID();
+        idUpdate.id = msg.id;
+        idUpdate.random_id = randomId;
+        updates.updates.add(idUpdate);
+        TL_update.TL_updateNewScheduledMessage update = new TL_update.TL_updateNewScheduledMessage();
+        update.message = msg;
+        updates.updates.add(update);
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        return updates;
+    }
+
+    // GET /messages/scheduled for this chat (a private chat without a conversation yet: by the user)
+    private String scheduledQuery(TLRPC.InputPeer peer) {
+        long chatId = peer.channel_id != 0 ? peer.channel_id : peer.chat_id;
+        String convId = chatId != 0 ? conversationIdByChatPeer.get(chatId) : conversationIdByUserPeer.get(peer.user_id);
+        if (convId != null) return "conversationId=" + convId;
+        String userId = peer instanceof TLRPC.TL_inputPeerSelf ? selfMongoId : userMongoIdByTlId.get(peer.user_id);
+        return userId != null ? "receiverId=" + userId : null;
+    }
+
+    private boolean handleScheduledRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TLRPC.TL_messages_getScheduledHistory || request instanceof TLRPC.TL_messages_getScheduledMessages) {
+            TLRPC.InputPeer inputPeer = request instanceof TLRPC.TL_messages_getScheduledHistory
+                    ? ((TLRPC.TL_messages_getScheduledHistory) request).peer : ((TLRPC.TL_messages_getScheduledMessages) request).peer;
+            ArrayList<Integer> only = request instanceof TLRPC.TL_messages_getScheduledMessages ? ((TLRPC.TL_messages_getScheduledMessages) request).id : null;
+            executor.execute(() -> {
+                TLRPC.TL_messages_messages res = new TLRPC.TL_messages_messages();
+                try {
+                    String q = scheduledQuery(inputPeer);
+                    if (q != null) {
+                        JSONArray list = requestArray("GET", "/messages/scheduled?" + q, null, true);
+                        TLRPC.Peer peer = peerFromInput(inputPeer);
+                        for (int i = 0; i < list.length(); i++) {
+                            TLRPC.TL_message msg = buildScheduledMessage(list.getJSONObject(i), peer);
+                            if (only == null || only.contains(msg.id)) res.messages.add(msg);
+                        }
+                        // newest first, like the history
+                        java.util.Collections.sort(res.messages, (a, b) -> Integer.compare(b.date, a.date));
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, res, null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_deleteScheduledMessages || request instanceof TLRPC.TL_messages_sendScheduledMessages) {
+            boolean send = request instanceof TLRPC.TL_messages_sendScheduledMessages;
+            TLRPC.InputPeer inputPeer = send ? ((TLRPC.TL_messages_sendScheduledMessages) request).peer : ((TLRPC.TL_messages_deleteScheduledMessages) request).peer;
+            ArrayList<Integer> ids = send ? ((TLRPC.TL_messages_sendScheduledMessages) request).id : ((TLRPC.TL_messages_deleteScheduledMessages) request).id;
+            executor.execute(() -> {
+                TL_update.TL_updateDeleteScheduledMessages gone = new TL_update.TL_updateDeleteScheduledMessages();
+                gone.peer = peerFromInput(inputPeer);
+                try {
+                    for (Integer id : ids) {
+                        String sid = scheduledMongoIdByTlId.get(id);
+                        if (sid == null) continue;
+                        if (send) request("POST", "/messages/scheduled/" + sid + "/send", new JSONObject(), true);
+                        else request("DELETE", "/messages/scheduled/" + sid, null, true);
+                        scheduledMongoIdByTlId.remove(id);
+                        gone.messages.add(id);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                if (!gone.messages.isEmpty()) updates.updates.add(gone);
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                complete(onComplete, updates, null);
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // a scheduled message went out (its time came): off the scheduled list
+    TLRPC.Update scheduledSentUpdate(String scheduledId, String conversationId) {
+        Integer tlId = null;
+        for (java.util.Map.Entry<Integer, String> e : scheduledMongoIdByTlId.entrySet()) {
+            if (e.getValue().equals(scheduledId)) tlId = e.getKey();
+        }
+        if (tlId == null) tlId = idFromMongoIdInt32(scheduledId);
+        scheduledMongoIdByTlId.remove(tlId);
+        TLRPC.Peer peer = conversationId != null ? resolvePeerForConversationId(conversationId) : null;
+        if (peer == null) return null;
+        TL_update.TL_updateDeleteScheduledMessages gone = new TL_update.TL_updateDeleteScheduledMessages();
+        gone.peer = peer;
+        gone.messages.add(tlId);
+        return gone;
     }
 
     // ---------------------------------------------------------------
@@ -5044,7 +5182,12 @@ public class RestBridge {
                 JSONArray formatting = entitiesToJson(req.entities);
                 if (formatting.length() > 0) body.put("entities", formatting);
                 putReplyTo(body, req.reply_to);
+                if (req.schedule_date != 0) body.put("scheduleDate", req.schedule_date);
                 JSONObject sent = request("POST", "/messages", body, true);
+                if (sent.optBoolean("scheduled", false)) {
+                    complete(onComplete, scheduledUpdates(new TLRPC.TL_updates(), sent, req.peer, req.random_id), null);
+                    return;
+                }
                 rememberConversation(req.peer, sent);
                 rememberMessageId(sent.getString("_id"));
 

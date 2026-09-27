@@ -102,6 +102,21 @@ public class SocketBridge {
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
         socket.on("gifts_changed", args -> onGiftsChanged(args));
+        // a scheduled message went out: off the "Scheduled messages" list
+        socket.on("scheduled_sent", args -> {
+            try {
+                if (args.length == 0 || !(args[0] instanceof JSONObject)) return;
+                JSONObject data = (JSONObject) args[0];
+                TLRPC.Update u = RestBridge.getInstance(currentAccount).scheduledSentUpdate(data.optString("scheduledId"), data.optString("conversationId", null));
+                if (u == null) return;
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.updates.add(u);
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                deliver(updates);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
         // Calls (Telegram's own call screens; see RestBridge "Calls")
         socket.on("phone_call", args -> onCallEvent(args, 0));
         socket.on("phone_call_signaling", args -> onCallEvent(args, 1));
