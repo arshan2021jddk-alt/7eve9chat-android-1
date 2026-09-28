@@ -4288,11 +4288,13 @@ public class RestBridge {
     // ---------------------------------------------------------------
     private static final String[][] REPORT_OPTIONS = {
             {"spam", "Spam"},
+            {"insult", "Insults or harassment"},
             {"violence", "Violence"},
             {"pornography", "Pornography"},
             {"child_abuse", "Child abuse"},
             {"illegal", "Illegal goods"},
             {"scam", "Scam or fraud"},
+            {"political", "Political content"},
             {"other", "Other"},
     };
 
