@@ -1440,6 +1440,33 @@ public class RestBridge {
                 complete(onComplete, themes, null);
                 return true;
             }
+            if (request instanceof TL_account.getWallPaper) {
+                // a wallpaper by its slug ("7e9" + id) or id: shared wallpaper links, saved backgrounds
+                TLRPC.InputWallPaper in = ((TL_account.getWallPaper) request).wallpaper;
+                long id = 0;
+                if (in instanceof TLRPC.TL_inputWallPaperSlug) {
+                    String slug = ((TLRPC.TL_inputWallPaperSlug) in).slug;
+                    if (slug != null && slug.startsWith("7e9")) {
+                        try {
+                            id = Long.parseUnsignedLong(slug.substring(3), 16);
+                        } catch (NumberFormatException ignore) {
+                        }
+                    }
+                } else if (in instanceof TLRPC.TL_inputWallPaper) {
+                    id = ((TLRPC.TL_inputWallPaper) in).id;
+                }
+                String url = id != 0 ? mediaUrlById.get(id) : null;
+                if (url == null) {
+                    complete(onComplete, null, tlError(400, "WALLPAPER_INVALID"));
+                } else {
+                    complete(onComplete, buildWallPaper(url, null), null);
+                }
+                return true;
+            }
+            if (request instanceof TL_account.saveWallPaper || request instanceof TL_account.installWallPaper) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null); // backgrounds are kept by the app
+                return true;
+            }
             if (request instanceof TL_account.getWallPapers) {
                 TL_account.TL_wallPapers papers = new TL_account.TL_wallPapers();
                 papers.hash = 1;
