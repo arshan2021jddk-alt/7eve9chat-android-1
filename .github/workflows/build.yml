@@ -78,7 +78,7 @@ jobs:
               if ! gradle :TMessagesProj_App:assembleAfatciDebug -PAPP_VERSION_CODE="$APP_VERSION_CODE_CI" ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
                 --stacktrace \
                 --console=plain 2>&1 | tee /tmp/gradle.log; then
-                # one annotation (GitHub keeps only 10 per step): Gradle's own summary first, then
+                # one annotation (GitHub keeps only 10 per step): the Gradle summary first, then
                 # Java / resource errors - never the C++ warnings
                 { grep -A15 "What went wrong" /tmp/gradle.log | head -45; echo "----"; grep -E "\\.java:[0-9]+: error:|error: resource|AAPT: error|Manifest merger failed|ERROR:" /tmp/gradle.log | grep -v "C/C++" | head -25; } \
                   | grep -v "^\s*at " | sed "s/%/%25/g" | awk "{printf \"%s%%0A\", \$0}" | sed "s/^/::error title=Build failed::/" || true
