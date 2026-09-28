@@ -53,7 +53,13 @@ public class BuildVars {
                 try {
                     java.io.StringWriter trace = new java.io.StringWriter();
                     exception.printStackTrace(new java.io.PrintWriter(trace));
-                    String report = "app " + BUILD_VERSION_STRING + " android " + android.os.Build.VERSION.SDK_INT
+                    String installed = "";
+                    try { // which build: when this APK was installed / updated
+                        long t = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0).lastUpdateTime;
+                        installed = " installed " + new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm'Z'", java.util.Locale.US) {{ setTimeZone(java.util.TimeZone.getTimeZone("UTC")); }}.format(new java.util.Date(t));
+                    } catch (Throwable ignore) {
+                    }
+                    String report = "app " + BUILD_VERSION_STRING + installed + " android " + android.os.Build.VERSION.SDK_INT
                             + " " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + "\nthread " + thread.getName() + "\n" + trace;
                     java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(ApplicationLoader.applicationContext.getFilesDir(), "7e9_crash.txt"));
                     out.write(report.getBytes("UTF-8"));

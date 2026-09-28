@@ -956,11 +956,10 @@ public class RestBridge {
             }
             // ---- simple acknowledgements for features kept on the device
             // (pins, folders, drafts, archive...) - right response types
-            if (request instanceof TLRPC.TL_messages_toggleDialogPin
-                    || request instanceof TLRPC.TL_messages_reorderPinnedDialogs
-                    || request instanceof TLRPC.TL_messages_markDialogUnread
-                    || request instanceof TLRPC.TL_messages_updateDialogFilter
-                    || request instanceof TLRPC.TL_messages_saveDraft
+            if (handleChatPrefsRequest(request, onComplete)) {
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_saveDraft
                     || request instanceof TLRPC.TL_messages_hidePeerSettingsBar
                     || request instanceof TL_account.updateStatus
                     || request instanceof TLRPC.TL_channels_toggleUsername
@@ -1053,21 +1052,6 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_messages_readMentions || request instanceof TLRPC.TL_messages_readReactions) {
                 complete(onComplete, new TLRPC.TL_messages_affectedHistory(), null);
-                return true;
-            }
-            if (request instanceof TLRPC.TL_messages_getDialogFilters) {
-                complete(onComplete, new TLRPC.TL_messages_dialogFilters(), null);
-                return true;
-            }
-            if (request instanceof TLRPC.TL_messages_getPinnedDialogs) {
-                TLRPC.TL_messages_peerDialogs pinned = new TLRPC.TL_messages_peerDialogs();
-                pinned.state = new TLRPC.TL_updates_state();
-                pinned.state.date = (int) (System.currentTimeMillis() / 1000L);
-                complete(onComplete, pinned, null);
-                return true;
-            }
-            if (request instanceof TLRPC.TL_messages_getDialogUnreadMarks) {
-                complete(onComplete, new Vector<>(TLRPC.DialogPeer::TLdeserialize), null);
                 return true;
             }
             if (request instanceof TLRPC.TL_help_getAppConfig) {
@@ -4857,6 +4841,291 @@ public class RestBridge {
     }
 
     // ---------------------------------------------------------------
+    // Pinned chats, chat folders and "marked as unread", kept on the server
+    // (/chat-prefs) so every device and a reinstall see the same ones. A chat is
+    // "u:<userId>" (private / Saved Messages) or "c:<conversationId>" (group, channel).
+    // ---------------------------------------------------------------
+    private String chatKey(long userId, long chatId) {
+        if (userId != 0) {
+            String id = userId == UserConfig.getInstance(currentAccount).getClientUserId() ? selfMongoId : userMongoIdByTlId.get(userId);
+            return id != null ? "u:" + id : null;
+        }
+        String conv = chatId != 0 ? conversationIdByChatPeer.get(chatId) : null;
+        return conv != null ? "c:" + conv : null;
+    }
+
+    private String chatKey(TLRPC.InputPeer p) {
+        if (p == null) return null;
+        if (p instanceof TLRPC.TL_inputPeerSelf) return selfMongoId != null ? "u:" + selfMongoId : null;
+        return chatKey(p.user_id, p.channel_id != 0 ? p.channel_id : p.chat_id);
+    }
+
+    private String chatKey(TLRPC.Peer p) {
+        return p == null ? null : chatKey(p.user_id, p.channel_id != 0 ? p.channel_id : p.chat_id);
+    }
+
+    private String chatKey(TLRPC.InputDialogPeer p) {
+        return p instanceof TLRPC.TL_inputDialogPeer ? chatKey(((TLRPC.TL_inputDialogPeer) p).peer) : null;
+    }
+
+    private TLRPC.InputPeer inputPeerForKey(String key) {
+        if (key == null || key.length() != 26) return null;
+        String id = key.substring(2);
+        if (key.startsWith("u:")) {
+            TLRPC.TL_inputPeerUser p = new TLRPC.TL_inputPeerUser();
+            p.user_id = idFromMongoId(id);
+            if (!id.equals(selfMongoId)) userMongoIdByTlId.put(p.user_id, id);
+            return p;
+        }
+        TLRPC.TL_inputPeerChannel p = new TLRPC.TL_inputPeerChannel();
+        p.channel_id = idFromMongoId(id);
+        conversationIdByChatPeer.put(p.channel_id, id);
+        return p;
+    }
+
+    private TLRPC.Peer peerForKey(String key) {
+        TLRPC.InputPeer ip = inputPeerForKey(key);
+        if (ip == null) return null;
+        if (ip.user_id != 0) {
+            TLRPC.TL_peerUser p = new TLRPC.TL_peerUser();
+            p.user_id = ip.user_id;
+            return p;
+        }
+        TLRPC.TL_peerChannel p = new TLRPC.TL_peerChannel();
+        p.channel_id = ip.channel_id;
+        return p;
+    }
+
+    private JSONObject chatPrefs() throws Exception {
+        return request("GET", "/chat-prefs", null, true);
+    }
+
+    private static java.util.List<String> jsonKeys(JSONArray a) {
+        java.util.List<String> out = new ArrayList<>();
+        for (int i = 0; a != null && i < a.length(); i++) out.add(a.optString(i));
+        return out;
+    }
+
+    // pinned chats first, in their order; "marked as unread"
+    private void applyChatPrefs(ArrayList<TLRPC.Dialog> dialogs, boolean archive) {
+        try {
+            JSONObject prefs = chatPrefs();
+            java.util.List<String> pinned = jsonKeys(prefs.optJSONObject("pinned") != null ? prefs.optJSONObject("pinned").optJSONArray(archive ? "archive" : "main") : null);
+            java.util.Set<String> unread = new java.util.HashSet<>(jsonKeys(prefs.optJSONArray("unread")));
+            ArrayList<TLRPC.Dialog> pinnedDialogs = new ArrayList<>();
+            for (TLRPC.Dialog d : dialogs) {
+                String key = chatKey(d.peer);
+                if (key == null) continue;
+                d.pinned = pinned.contains(key);
+                d.unread_mark = unread.contains(key);
+                if (d.pinned) pinnedDialogs.add(d);
+            }
+            pinnedDialogs.sort((a, b) -> Integer.compare(pinned.indexOf(chatKey(a.peer)), pinned.indexOf(chatKey(b.peer))));
+            dialogs.removeAll(pinnedDialogs);
+            dialogs.addAll(0, pinnedDialogs);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private JSONArray keysOf(ArrayList<TLRPC.InputPeer> peers) {
+        JSONArray a = new JSONArray();
+        for (TLRPC.InputPeer p : peers) {
+            String k = chatKey(p);
+            if (k != null) a.put(k);
+        }
+        return a;
+    }
+
+    private void putKeys(JSONArray keys, ArrayList<TLRPC.InputPeer> into) {
+        for (int i = 0; keys != null && i < keys.length(); i++) {
+            TLRPC.InputPeer p = inputPeerForKey(keys.optString(i));
+            if (p != null) into.add(p);
+        }
+    }
+
+    private boolean handleChatPrefsRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TLRPC.TL_messages_toggleDialogPin || request instanceof TLRPC.TL_messages_reorderPinnedDialogs) {
+            executor.execute(() -> {
+                try {
+                    int folder;
+                    JSONArray keys = new JSONArray();
+                    if (request instanceof TLRPC.TL_messages_reorderPinnedDialogs) {
+                        TLRPC.TL_messages_reorderPinnedDialogs req = (TLRPC.TL_messages_reorderPinnedDialogs) request;
+                        folder = req.folder_id;
+                        for (TLRPC.InputDialogPeer p : req.order) {
+                            String k = chatKey(p);
+                            if (k != null) keys.put(k);
+                        }
+                    } else {
+                        TLRPC.TL_messages_toggleDialogPin req = (TLRPC.TL_messages_toggleDialogPin) request;
+                        String key = chatKey(req.peer);
+                        long did = req.peer instanceof TLRPC.TL_inputDialogPeer ? org.telegram.messenger.DialogObject.getPeerDialogId(((TLRPC.TL_inputDialogPeer) req.peer).peer) : 0;
+                        TLRPC.Dialog local = did != 0 ? org.telegram.messenger.MessagesController.getInstance(currentAccount).dialogs_dict.get(did) : null;
+                        folder = local != null ? local.folder_id : 0;
+                        JSONObject pinned = chatPrefs().optJSONObject("pinned");
+                        java.util.List<String> list = jsonKeys(pinned != null ? pinned.optJSONArray(folder == 1 ? "archive" : "main") : null);
+                        list.remove(key);
+                        if (req.pinned && key != null) list.add(0, key);
+                        for (String k : list) keys.put(k);
+                    }
+                    request("PUT", "/chat-prefs/pinned", new JSONObject().put("folder", folder).put("keys", keys), true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null); // kept on the device at least
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_getPinnedDialogs) {
+            int folder = ((TLRPC.TL_messages_getPinnedDialogs) request).folder_id;
+            executor.execute(() -> {
+                TLRPC.TL_messages_peerDialogs out = new TLRPC.TL_messages_peerDialogs();
+                out.state = new TLRPC.TL_updates_state();
+                out.state.date = (int) (System.currentTimeMillis() / 1000L);
+                TLRPC.TL_messages_getDialogs all = new TLRPC.TL_messages_getDialogs();
+                all.folder_id = folder;
+                all.offset_peer = new TLRPC.TL_inputPeerEmpty();
+                handleGetDialogs(all, (resp, err) -> {
+                    if (resp instanceof TLRPC.messages_Dialogs) {
+                        TLRPC.messages_Dialogs d = (TLRPC.messages_Dialogs) resp;
+                        java.util.Set<Long> ids = new java.util.HashSet<>();
+                        for (TLRPC.Dialog dialog : d.dialogs) {
+                            if (dialog.pinned && !(dialog instanceof TLRPC.TL_dialogFolder)) {
+                                out.dialogs.add(dialog);
+                                ids.add(dialog.id);
+                            }
+                        }
+                        for (TLRPC.Message m : d.messages) {
+                            if (ids.contains(org.telegram.messenger.MessageObject.getDialogId(m))) out.messages.add(m);
+                        }
+                        out.chats.addAll(d.chats);
+                        out.users.addAll(d.users);
+                    }
+                    onComplete.run(out, null);
+                });
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_markDialogUnread) {
+            TLRPC.TL_messages_markDialogUnread req = (TLRPC.TL_messages_markDialogUnread) request;
+            executor.execute(() -> {
+                try {
+                    String key = chatKey(req.peer);
+                    if (key != null) request("PUT", "/chat-prefs/unread", new JSONObject().put("key", key).put("unread", req.unread), true);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_getDialogUnreadMarks) {
+            executor.execute(() -> {
+                Vector<TLRPC.DialogPeer> marks = new Vector<>(TLRPC.DialogPeer::TLdeserialize);
+                try {
+                    for (String k : jsonKeys(chatPrefs().optJSONArray("unread"))) {
+                        TLRPC.Peer p = peerForKey(k);
+                        if (p == null) continue;
+                        TLRPC.TL_dialogPeer dp = new TLRPC.TL_dialogPeer();
+                        dp.peer = p;
+                        marks.objects.add(dp);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, marks, null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_getDialogFilters) {
+            executor.execute(() -> {
+                TLRPC.TL_messages_dialogFilters res = new TLRPC.TL_messages_dialogFilters();
+                try {
+                    JSONObject prefs = chatPrefs();
+                    JSONArray filters = prefs.optJSONArray("filters");
+                    int allAt = prefs.optInt("allChatsAt", 0);
+                    for (int i = 0; filters != null && i < filters.length(); i++) {
+                        JSONObject f = filters.getJSONObject(i);
+                        TLRPC.TL_dialogFilter df = new TLRPC.TL_dialogFilter();
+                        df.id = f.getInt("id");
+                        df.title = new TLRPC.TL_textWithEntities();
+                        df.title.text = f.optString("title", "Folder");
+                        String emoticon = f.optString("emoticon", "");
+                        if (!emoticon.isEmpty()) {
+                            df.emoticon = emoticon;
+                            df.flags |= TLObject.FLAG_25;
+                        }
+                        if (f.has("color")) {
+                            df.color = f.optInt("color");
+                            df.flags |= TLObject.FLAG_27;
+                        }
+                        df.contacts = f.optBoolean("contacts");
+                        df.non_contacts = f.optBoolean("non_contacts");
+                        df.groups = f.optBoolean("groups");
+                        df.broadcasts = f.optBoolean("broadcasts");
+                        df.bots = f.optBoolean("bots");
+                        df.exclude_muted = f.optBoolean("exclude_muted");
+                        df.exclude_read = f.optBoolean("exclude_read");
+                        df.exclude_archived = f.optBoolean("exclude_archived");
+                        putKeys(f.optJSONArray("pinned"), df.pinned_peers);
+                        putKeys(f.optJSONArray("include"), df.include_peers);
+                        putKeys(f.optJSONArray("exclude"), df.exclude_peers);
+                        res.filters.add(df);
+                    }
+                    // "All chats" in its place
+                    res.filters.add(Math.min(Math.max(allAt, 0), res.filters.size()), new TLRPC.TL_dialogFilterDefault());
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, res, null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_updateDialogFilter) {
+            TLRPC.TL_messages_updateDialogFilter req = (TLRPC.TL_messages_updateDialogFilter) request;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    TLRPC.TL_dialogFilter f = req.filter;
+                    if (f != null) {
+                        JSONObject j = new JSONObject();
+                        j.put("title", f.title != null ? f.title.text : "");
+                        if (f.emoticon != null) j.put("emoticon", f.emoticon);
+                        if ((f.flags & TLObject.FLAG_27) != 0) j.put("color", f.color);
+                        j.put("contacts", f.contacts).put("non_contacts", f.non_contacts).put("groups", f.groups)
+                                .put("broadcasts", f.broadcasts).put("bots", f.bots).put("exclude_muted", f.exclude_muted)
+                                .put("exclude_read", f.exclude_read).put("exclude_archived", f.exclude_archived);
+                        j.put("pinned", keysOf(f.pinned_peers)).put("include", keysOf(f.include_peers)).put("exclude", keysOf(f.exclude_peers));
+                        body.put("filter", j);
+                    }
+                    request("PUT", "/chat-prefs/filters/" + req.id, body, true);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_updateDialogFiltersOrder) {
+            ArrayList<Integer> order = ((TLRPC.TL_messages_updateDialogFiltersOrder) request).order;
+            executor.execute(() -> {
+                try {
+                    JSONArray a = new JSONArray();
+                    for (Integer id : order) a.put(id);
+                    request("PUT", "/chat-prefs/filters-order", new JSONObject().put("order", a), true);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // ---------------------------------------------------------------
     // Scheduled messages ("Schedule message"): the server keeps them until their time
     // ---------------------------------------------------------------
     private final java.util.concurrent.ConcurrentHashMap<Integer, String> scheduledMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
@@ -5179,6 +5448,7 @@ public class RestBridge {
                     }
                     result.dialogs.add(dialog);
                 }
+                applyChatPrefs(result.dialogs, archiveFolder);
                 if (archiveEntry != null) {
                     result.dialogs.add(0, archiveEntry);
                 }

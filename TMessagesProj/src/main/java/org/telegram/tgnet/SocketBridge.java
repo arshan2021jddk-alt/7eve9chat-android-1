@@ -102,6 +102,19 @@ public class SocketBridge {
         socket.on("member_kicked", args -> refreshDialogs());
         socket.on("user_updated", args -> onUserUpdated(args));
         socket.on("gifts_changed", args -> onGiftsChanged(args));
+        // pinned chats / folders / unread marks changed on another device
+        socket.on("chat_prefs_updated", args -> {
+            try {
+                String what = args.length > 0 && args[0] instanceof JSONObject ? ((JSONObject) args[0]).optString("what") : "";
+                if ("filters".equals(what)) {
+                    org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> AccountInstance.getInstance(currentAccount).getMessagesController().loadRemoteFilters(true));
+                } else {
+                    refreshDialogs();
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
         // a scheduled message went out: off the "Scheduled messages" list
         socket.on("scheduled_sent", args -> {
             try {
