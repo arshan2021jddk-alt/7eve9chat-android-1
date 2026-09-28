@@ -6865,6 +6865,9 @@ public class AlertsCreator {
             case "USER_RESTRICTED":
                 builder.setMessage(LocaleController.getString(R.string.UserRestricted));
                 break;
+            case "GUARD_RESTRICTED": // 7eve9 Guard: restricted from sending
+                builder.setMessage(LocaleController.getString(R.string.GuardRestricted));
+                break;
             case "YOU_BLOCKED_USER":
                 builder.setMessage(LocaleController.getString(R.string.YouBlockedUser));
                 break;

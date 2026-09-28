@@ -11660,7 +11660,7 @@ public class RestBridge {
         String lower = m.toLowerCase(Locale.US);
         if (m.matches("[A-Z][A-Z0-9_]+")) {
             error.code = 400;
-            error.text = m;
+            error.text = "USER_RESTRICTED".equals(m) ? "GUARD_RESTRICTED" : m; // 7eve9 Guard's restriction
         } else if (statusCode == 429 && lower.contains("slow mode")) {
             java.util.regex.Matcher wait = java.util.regex.Pattern.compile("(\\d+)").matcher(m);
             error.code = 420;
