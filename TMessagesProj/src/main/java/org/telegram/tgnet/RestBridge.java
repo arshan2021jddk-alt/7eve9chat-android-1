@@ -105,6 +105,9 @@ public class RestBridge {
     // upload.getFile can serve real bytes for chat media, avatars and stories.
     private final java.util.concurrent.ConcurrentHashMap<Long, String> mediaUrlById = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean emojiPacksIndexed;
+    private static final java.util.Set<String> TELEGRAM_BUILTIN_SETS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "RestrictedEmoji", "tg_placeholders_android", "EmojiAnimations", "StatusEmojiWhite", "EmojiGenericAnimations",
+            "EmojiAroundAnimations", "UserpicAnimations", "tg_superchannel_emoji"));
 
     // Backend history is page/limit based, not id-cursor based like Telegram's
     // real protocol - this tracks how many messages we've already handed out
@@ -6607,6 +6610,21 @@ public class RestBridge {
                 if ((setTlId & 0x4000000000000000L) != 0) emojiSetIds.add(setTlId); // an emoji pack id (see handleGetEmojiSets)
                 String mongoSetId = stickerSetMongoIdById.get(setTlId);
                 JSONArray stickers = null;
+                if (mongoSetId == null && req.stickerset instanceof TLRPC.TL_inputStickerSetShortName
+                        && TELEGRAM_BUILTIN_SETS.contains(((TLRPC.TL_inputStickerSetShortName) req.stickerset).short_name)) {
+                    // Telegram's own built-in sets (not on this server): an empty set the app keeps,
+                    // instead of an error it asks again for (thousands of requests otherwise)
+                    TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                    set.short_name = ((TLRPC.TL_inputStickerSetShortName) req.stickerset).short_name;
+                    set.id = idForUrl("tg-builtin:" + set.short_name);
+                    set.access_hash = 1;
+                    set.title = set.short_name;
+                    set.emojis = true;
+                    TLRPC.TL_messages_stickerSet empty = new TLRPC.TL_messages_stickerSet();
+                    empty.set = set;
+                    complete(onComplete, empty, null);
+                    return;
+                }
                 if (mongoSetId == null && req.stickerset instanceof TLRPC.TL_inputStickerSetShortName) {
                     // a 7eve9craft.ir/addstickers/NAME or /addemoji/NAME link
                     String name = ((TLRPC.TL_inputStickerSetShortName) req.stickerset).short_name;
