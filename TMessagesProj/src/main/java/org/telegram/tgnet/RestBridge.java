@@ -4912,12 +4912,18 @@ public class RestBridge {
             JSONObject prefs = chatPrefs();
             java.util.List<String> pinned = jsonKeys(prefs.optJSONObject("pinned") != null ? prefs.optJSONObject("pinned").optJSONArray(archive ? "archive" : "main") : null);
             java.util.Set<String> unread = new java.util.HashSet<>(jsonKeys(prefs.optJSONArray("unread")));
+            JSONObject drafts = prefs.optJSONObject("drafts");
             ArrayList<TLRPC.Dialog> pinnedDialogs = new ArrayList<>();
             for (TLRPC.Dialog d : dialogs) {
                 String key = chatKey(d.peer);
                 if (key == null) continue;
                 d.pinned = pinned.contains(key);
                 d.unread_mark = unread.contains(key);
+                JSONObject draft = drafts != null ? drafts.optJSONObject(key) : null;
+                if (draft != null && !draft.optString("text").isEmpty()) {
+                    d.draft = buildDraft(draft);
+                    d.flags |= TLObject.FLAG_1;
+                }
                 if (d.pinned) pinnedDialogs.add(d);
             }
             pinnedDialogs.sort((a, b) -> Integer.compare(pinned.indexOf(chatKey(a.peer)), pinned.indexOf(chatKey(b.peer))));
@@ -4944,7 +4950,88 @@ public class RestBridge {
         }
     }
 
+    // cloud drafts: this device's id, so it ignores the server's echo of its own draft
+    final String draftOrigin = "a" + Utilities.random.nextLong();
+
+    TLRPC.TL_draftMessage buildDraft(JSONObject d) {
+        TLRPC.TL_draftMessage draft = new TLRPC.TL_draftMessage();
+        draft.message = d.optString("text", "");
+        draft.date = d.optInt("date", (int) (System.currentTimeMillis() / 1000L));
+        ArrayList<TLRPC.MessageEntity> entities = entitiesFromJson(d.optJSONArray("entities"));
+        if (entities != null && !entities.isEmpty()) {
+            draft.entities = entities;
+            draft.flags |= TLObject.FLAG_3;
+        }
+        String replyTo = d.optString("replyTo", "");
+        if (replyTo.length() == 24) {
+            rememberMessageId(replyTo);
+            TLRPC.TL_inputReplyToMessage r = new TLRPC.TL_inputReplyToMessage();
+            r.reply_to_msg_id = idFromMongoIdInt32(replyTo);
+            draft.reply_to = r;
+            draft.flags |= TLObject.FLAG_4;
+        }
+        return draft;
+    }
+
+    // another device changed a draft: Telegram's updateDraftMessage
+    TLRPC.Update draftUpdate(JSONObject data) {
+        if (draftOrigin.equals(data.optString("origin"))) return null;
+        TLRPC.Peer peer = peerForKey(data.optString("key"));
+        if (peer == null) return null;
+        TL_update.TL_updateDraftMessage u = new TL_update.TL_updateDraftMessage();
+        u.peer = peer;
+        JSONObject d = data.optJSONObject("draft");
+        u.draft = d != null ? buildDraft(d) : new TLRPC.TL_draftMessageEmpty();
+        return u;
+    }
+
     private boolean handleChatPrefsRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TLRPC.TL_messages_saveDraft) {
+            TLRPC.TL_messages_saveDraft req = (TLRPC.TL_messages_saveDraft) request;
+            executor.execute(() -> {
+                try {
+                    String key = chatKey(req.peer);
+                    if (key != null) {
+                        JSONObject body = new JSONObject().put("key", key).put("text", req.message != null ? req.message : "").put("origin", draftOrigin);
+                        JSONArray entities = entitiesToJson(req.entities);
+                        if (entities.length() > 0) body.put("entities", entities);
+                        if (req.reply_to != null && req.reply_to.reply_to_msg_id != 0) {
+                            String mongo = messageMongoIdByTlId.get(req.reply_to.reply_to_msg_id);
+                            if (mongo != null) body.put("replyTo", mongo);
+                        }
+                        request("PUT", "/chat-prefs/draft", body, true);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_getAllDrafts) {
+            executor.execute(() -> {
+                TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                updates.date = (int) (System.currentTimeMillis() / 1000L);
+                try {
+                    JSONObject drafts = chatPrefs().optJSONObject("drafts");
+                    java.util.Iterator<String> it = drafts != null ? drafts.keys() : null;
+                    while (it != null && it.hasNext()) {
+                        String key = it.next();
+                        TLRPC.Peer peer = peerForKey(key);
+                        JSONObject d = drafts.optJSONObject(key);
+                        if (peer == null || d == null) continue;
+                        TL_update.TL_updateDraftMessage u = new TL_update.TL_updateDraftMessage();
+                        u.peer = peer;
+                        u.draft = buildDraft(d);
+                        updates.updates.add(u);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                complete(onComplete, updates, null);
+            });
+            return true;
+        }
         if (request instanceof TLRPC.TL_messages_toggleDialogPin || request instanceof TLRPC.TL_messages_reorderPinnedDialogs) {
             executor.execute(() -> {
                 try {

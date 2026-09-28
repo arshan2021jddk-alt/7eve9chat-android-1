@@ -106,7 +106,15 @@ public class SocketBridge {
         socket.on("chat_prefs_updated", args -> {
             try {
                 String what = args.length > 0 && args[0] instanceof JSONObject ? ((JSONObject) args[0]).optString("what") : "";
-                if ("filters".equals(what)) {
+                if ("draft".equals(what)) {
+                    TLRPC.Update u = RestBridge.getInstance(currentAccount).draftUpdate((JSONObject) args[0]);
+                    if (u != null) {
+                        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+                        updates.updates.add(u);
+                        updates.date = (int) (System.currentTimeMillis() / 1000L);
+                        deliver(updates);
+                    }
+                } else if ("filters".equals(what)) {
                     org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> AccountInstance.getInstance(currentAccount).getMessagesController().loadRemoteFilters(true));
                 } else {
                     refreshDialogs();
