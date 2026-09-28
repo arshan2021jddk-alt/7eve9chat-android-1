@@ -23,6 +23,8 @@ public class BuildVars {
     public static boolean DEBUG_PRIVATE_VERSION = BuildConfig.DEBUG_PRIVATE_VERSION;
     public static boolean USE_CLOUD_STRINGS = true;
     public static boolean CHECK_UPDATES = true;
+    // 7eve9chat: updates come from our own server (help.getAppUpdate -> /api/app/update), in every build
+    public static boolean SEVEN_NINE_UPDATES = true;
     public static boolean NO_SCOPED_STORAGE = Build.VERSION.SDK_INT <= 29;
     public static String BUILD_VERSION_STRING = BuildConfig.BUILD_VERSION_STRING;
 

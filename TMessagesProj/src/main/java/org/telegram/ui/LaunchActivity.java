@@ -5993,7 +5993,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
 
     private boolean firstAppUpdateCheck = true;
     public void checkAppUpdate(boolean force, Browser.Progress progress) {
-        if (!ApplicationLoader.isStandaloneBuild() && !ApplicationLoader.isBetaBuild()) {
+        if (!ApplicationLoader.isStandaloneBuild() && !ApplicationLoader.isBetaBuild() && !BuildVars.SEVEN_NINE_UPDATES) {
             return;
         }
         if (!force && !BuildVars.CHECK_UPDATES) {
@@ -6046,7 +6046,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                     if (newVersionAvailable) {
                         if (res.can_not_skip) {
                             showUpdateActivity(accountNum, res, false);
-                        } else if (ApplicationLoader.isStandaloneBuild() || BuildVars.DEBUG_VERSION) {
+                        } else if (ApplicationLoader.isStandaloneBuild() || BuildVars.DEBUG_VERSION || BuildVars.SEVEN_NINE_UPDATES) {
                             ApplicationLoader.applicationLoaderInstance.showUpdateAppPopup(LaunchActivity.this, res, accountNum);
                         }
                         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);

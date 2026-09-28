@@ -58,6 +58,7 @@ jobs:
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/home/source" \
             -e SEVEN_KEY_ALIAS -e SEVEN_STORE_PASSWORD -e SEVEN_KEY_PASSWORD \
+            -e APP_VERSION_CODE_CI="$((7089 + GITHUB_RUN_NUMBER))" \
             telegram-build \
             bash -lc '
               set -Eeuo pipefail
@@ -73,7 +74,8 @@ jobs:
               fi
 
               # errors also become annotations (readable through the API without the log)
-              if ! gradle :TMessagesProj_App:assembleAfatciDebug ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
+              # every build a higher version code, so the app can update itself to it
+              if ! gradle :TMessagesProj_App:assembleAfatciDebug -PAPP_VERSION_CODE="$APP_VERSION_CODE_CI" ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
                 --stacktrace \
                 --console=plain 2>&1 | tee /tmp/gradle.log; then
                 grep -E "error:|\\* What went wrong|AAPT|ERROR:|e: " /tmp/gradle.log | grep -v "^\s*at " | sort -u | head -40 | sed "s/^/::error::/" || true
@@ -148,5 +150,5 @@ jobs:
           gh release create latest-build \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Latest debug build" \
-            --notes "Run ${GITHUB_RUN_ID}" \
+            --notes "Run ${GITHUB_RUN_ID} versionCode=$(( (7089 + GITHUB_RUN_NUMBER) * 10 + 9 )) commit=${GITHUB_SHA::8}" \
             "${APK_FILES[@]}"

@@ -1440,6 +1440,34 @@ public class RestBridge {
                 complete(onComplete, themes, null);
                 return true;
             }
+            if (request instanceof TLRPC.TL_help_getAppUpdate) {
+                // a newer build on our server: Telegram's own update banner / download / install
+                executor.execute(() -> {
+                    try {
+                        JSONObject u = request("GET", "/app/update", null, true);
+                        long installed = ApplicationLoader.applicationContext.getPackageManager()
+                                .getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0).versionCode;
+                        String url = u.optString("url", "");
+                        if (u.optLong("versionCode", 0) > installed && !url.isEmpty()) {
+                            TLRPC.TL_help_appUpdate up = new TLRPC.TL_help_appUpdate();
+                            up.id = u.optInt("versionCode");
+                            up.version = u.optString("version", String.valueOf(up.id));
+                            up.text = u.optString("notes", "");
+                            up.can_not_skip = u.optBoolean("force", false);
+                            TLRPC.TL_messageMediaDocument media = buildDocumentMedia(absoluteUrl(url), "application/vnd.android.package-archive", "7eve9Chat-" + up.version + ".apk", "file");
+                            media.document.size = u.optLong("size", media.document.size);
+                            up.document = media.document;
+                            up.flags |= TLObject.FLAG_1;
+                            complete(onComplete, up, null);
+                            return;
+                        }
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    complete(onComplete, new TLRPC.TL_help_noAppUpdate(), null);
+                });
+                return true;
+            }
             if (request instanceof TL_account.getWallPaper) {
                 // a wallpaper by its slug ("7e9" + id) or id: shared wallpaper links, saved backgrounds
                 TLRPC.InputWallPaper in = ((TL_account.getWallPaper) request).wallpaper;
