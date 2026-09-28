@@ -1443,6 +1443,27 @@ public class RestBridge {
                 complete(onComplete, themes, null);
                 return true;
             }
+            if (request instanceof TLRPC.TL_help_dismissSuggestion || request instanceof TLRPC.TL_help_saveAppLog) {
+                complete(onComplete, new TLRPC.TL_boolTrue(), null); // suggestions stay dismissed on this device
+                return true;
+            }
+            if (request instanceof TLRPC.TL_messages_getAttachedStickers) {
+                complete(onComplete, new Vector<>(TLRPC.StickerSetCovered::TLdeserialize), null); // no sticker masks on photos here
+                return true;
+            }
+            if (request instanceof TLRPC.TL_help_getPremiumPromo) {
+                // the Premium page: Premium is given by the 7eve9Chat team (nothing to buy here)
+                TLRPC.TL_help_premiumPromo promo = new TLRPC.TL_help_premiumPromo();
+                boolean fa = "fa".equals(org.telegram.messenger.LocaleController.getInstance().getCurrentLocaleInfo() != null
+                        ? org.telegram.messenger.LocaleController.getInstance().getCurrentLocaleInfo().pluralLangCode : "");
+                boolean premium = org.telegram.messenger.UserConfig.getInstance(currentAccount).isPremium();
+                promo.status_text = premium
+                        ? (fa ? "اشتراک Premium شما فعال است." : "Your Premium subscription is active.")
+                        : (fa ? "Premium توسط تیم 7eve9Chat فعال می‌شود." : "Premium is activated by the 7eve9Chat team.");
+                promo.currency = "USD";
+                complete(onComplete, promo, null);
+                return true;
+            }
             if (request instanceof TLRPC.TL_help_getAppUpdate) {
                 // a newer build on our server: Telegram's own update banner / download / install
                 executor.execute(() -> {
