@@ -6997,6 +6997,53 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
 
     View feedbackView;
 
+    // 7eve9chat: new messages arrive over the background connection (no FCM); Android's battery
+    // optimization cuts it in Doze. Asked once after login, never again if refused.
+    private void checkBatteryOptimization() {
+        if (Build.VERSION.SDK_INT < 23 || !UserConfig.getInstance(currentAccount).isClientActivated()) {
+            return;
+        }
+        SharedPreferences prefs = MessagesController.getGlobalMainSettings();
+        if (prefs.getBoolean("7e9_battery_asked", false) || !MessagesController.getInstance(currentAccount).keepAliveService && !MessagesController.getGlobalNotificationsSettings().getBoolean("pushService", false)) {
+            return;
+        }
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                return;
+            }
+        } catch (Throwable e) {
+            return;
+        }
+        prefs.edit().putBoolean("7e9_battery_asked", true).apply();
+        AndroidUtilities.runOnUIThread(() -> {
+            if (isFinishing()) {
+                return;
+            }
+            boolean fa = "fa".equals(LocaleController.getInstance().getCurrentLocale().getLanguage());
+            AlertDialog.Builder builder = new AlertDialog.Builder(LaunchActivity.this);
+            builder.setTitle(fa ? "دریافت پیام‌ها در پس‌زمینه" : "Messages in the background");
+            builder.setMessage(fa ? "برای اینکه وقتی برنامه بسته است هم پیام‌های جدید را دریافت کنید، اجازه دهید 7eve9Chat در پس‌زمینه فعال بماند." : "To receive new messages while the app is closed, allow 7eve9Chat to stay active in the background.");
+            builder.setPositiveButton(fa ? "اجازه می‌دهم" : "Allow", (d, w) -> {
+                try {
+                    Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                } catch (Throwable e) {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    } catch (Throwable ignore) {
+                    }
+                }
+            });
+            builder.setNegativeButton(fa ? "بعداً" : "Not now", null);
+            try {
+                builder.show();
+            } catch (Throwable ignore) {
+            }
+        }, 2500);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -7010,6 +7057,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             Theme.checkAutoNightThemeConditions();
         }
         checkWasMutedByAdmin(true);
+        checkBatteryOptimization();
         //FileLog.d("UI resume time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.startAllHeavyOperations, 4096);
         MediaController.getInstance().setFeedbackView(feedbackView = actionBarLayout.getView(), true);

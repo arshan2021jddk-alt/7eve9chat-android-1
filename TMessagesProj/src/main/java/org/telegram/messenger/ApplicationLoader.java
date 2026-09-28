@@ -361,11 +361,18 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false); // 7eve9chat: opt-in via Notifications > Keep-Alive Service
+            // 7eve9chat: no FCM for this backend - the background connection is what brings new
+            // messages while the app is closed, so it is on unless the user turned it off
+            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", true);
         }
         if (enabled) {
             try {
-                applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
+                // Android 8+: a background start must be a foreground service (it calls startForeground at once)
+                if (Build.VERSION.SDK_INT >= 26) {
+                    applicationContext.startForegroundService(new Intent(applicationContext, NotificationsService.class));
+                } else {
+                    applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
+                }
             } catch (Throwable ignore) {
 
             }

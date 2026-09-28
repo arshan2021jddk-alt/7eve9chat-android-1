@@ -57,16 +57,22 @@ public class NotificationsService extends Service {
             Intent open = new Intent(this, org.telegram.ui.LaunchActivity.class);
             open.setAction(Intent.ACTION_MAIN);
             PendingIntent contentIntent = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE);
+            boolean fa = "fa".equals(LocaleController.getInstance().getCurrentLocale().getLanguage());
             Notification notification = new NotificationCompat.Builder(this, KEEP_ALIVE_CHANNEL)
                     .setSmallIcon(R.drawable.notification)
                     .setContentTitle("7eve9Chat")
-                    .setContentText("Connected - you will receive new messages")
+                    .setContentText(fa ? "متصل — پیام‌های جدید را دریافت می‌کنید" : "Connected - you will receive new messages")
                     .setPriority(NotificationCompat.PRIORITY_MIN)
                     .setOngoing(true)
                     .setShowWhen(false)
                     .setContentIntent(contentIntent)
                     .build();
-            startForeground(9797, notification);
+            // "remote messaging": no daily time limit (Android 15 limits "data sync" to 6 hours a day)
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(9797, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+            } else {
+                startForeground(9797, notification);
+            }
         } catch (Throwable e) {
             FileLog.e(e);
         }
