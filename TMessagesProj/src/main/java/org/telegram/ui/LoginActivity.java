@@ -3219,6 +3219,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                                     needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), error1.text);
                                 }
                             }), ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin);
+                        } else if (error.text.contains("SMS_CODE_CREATE_FAILED")) {
+                            needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString(R.string.SmsCodeCreateFailed));
                         } else if (error.text.contains("PHONE_NUMBER_INVALID")) {
                             needShowInvalidAlert(LoginActivity.this, phone, phoneInputData, false);
                         } else if (error.text.contains("PHONE_PASSWORD_FLOOD")) {

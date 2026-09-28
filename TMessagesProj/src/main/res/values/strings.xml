@@ -3675,6 +3675,7 @@
     <string name="SecurityTitle">Security</string>
     <string name="DeleteAccountTitle">Account self-destruct</string>
     <string name="DeleteAccountNow">Delete account now</string>
+    <string name="SmsCodeCreateFailed">We couldn\'t send the code by SMS right now. Please try again in a few minutes.</string>
     <string name="DeleteAccountNowConfirm">Your name, phone number, username, photos, stories, gifts and sessions will be deleted and you will appear as **Deleted Account** to others. Messages you sent stay in other people\'s chats.\n\nThis cannot be undone.</string>
     <string name="DeleteAccountNowButton">Delete my account</string>
     <string name="DeleteAccountNowPassword">Your account is protected with Two-Step Verification. To delete it, confirm with a login code on 7eve9craft.ir/deactivate.</string>

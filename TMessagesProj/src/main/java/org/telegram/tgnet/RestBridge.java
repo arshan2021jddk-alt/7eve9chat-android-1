@@ -13647,6 +13647,8 @@ public class RestBridge {
         String msg = e.message == null ? "" : e.message;
         if (e.statusCode == 429) {
             error.text = "FLOOD_WAIT_60";
+        } else if (msg.contains("SMS_SEND_FAILED")) {
+            error.text = "SMS_CODE_CREATE_FAILED"; // the SMS service is down: tell the user, don't wait for a code
         } else {
             error.text = "PHONE_NUMBER_INVALID:" + msg;
         }
