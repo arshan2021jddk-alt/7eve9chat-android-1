@@ -1462,6 +1462,32 @@ public class RestBridge {
                 handleSimpleConversationCall(req.channel.channel_id, "PUT", "/emoji-status", body, new TLRPC.TL_updates(), onComplete);
                 return true;
             }
+            if (request instanceof TL_stars.saveStarGift || request instanceof TL_stars.toggleStarGiftsPinnedToTop) {
+                // show / hide my gift on my profile; pin gifts to the top of it
+                executor.execute(() -> {
+                    try {
+                        if (request instanceof TL_stars.saveStarGift) {
+                            TL_stars.saveStarGift req = (TL_stars.saveStarGift) request;
+                            String giftId = req.stargift instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) req.stargift).slug : null;
+                            if (giftId != null && giftId.matches("[0-9a-fA-F]{24}")) {
+                                request("PUT", "/gifts/" + giftId + "/visibility", new JSONObject().put("visible", !req.unsave), true);
+                            }
+                        } else {
+                            JSONArray ids = new JSONArray();
+                            for (TL_stars.InputSavedStarGift g : ((TL_stars.toggleStarGiftsPinnedToTop) request).stargift) {
+                                String giftId = g instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) g).slug : null;
+                                if (giftId != null && giftId.matches("[0-9a-fA-F]{24}")) ids.put(giftId);
+                            }
+                            request("PUT", "/gifts/pinned", new JSONObject().put("ids", ids), true);
+                        }
+                        complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                        complete(onComplete, null, tlError(400, "STARGIFT_INVALID"));
+                    }
+                });
+                return true;
+            }
             if (request instanceof TL_stars.transferStarGift) {
                 // give my gift to someone else, or to a group / channel (it goes on its profile)
                 TL_stars.transferStarGift req = (TL_stars.transferStarGift) request;
@@ -10585,7 +10611,9 @@ public class RestBridge {
                 TL_stars.TL_payments_savedStarGifts result = new TL_stars.TL_payments_savedStarGifts();
                 for (int i = 0; i < gifts.length(); i++) {
                     JSONObject g = gifts.getJSONObject(i);
-                    if (!g.optBoolean("isVisibleInProfile", true)) continue;
+                    // my hidden gifts stay on my list, marked hidden (Telegram's "unsaved")
+                    boolean hidden = !g.optBoolean("isVisibleInProfile", true);
+                    if (hidden && !self) continue;
 
                     // Prefer the Lottie animation, fall back to the static picture.
                     String pictureUrl = g.optString("animationUrl", "");
@@ -10635,6 +10663,8 @@ public class RestBridge {
                         ownerPeer.user_id = idFromMongoId(userMongoId);
                     }
                     saved.gift = collectibleGift(g, starGift, ownerPeer, i + 1);
+                    saved.unsaved = hidden;
+                    saved.pinned_to_top = g.optInt("pinnedOrder", 0) > 0;
                     saved.date = parseIsoToEpochSeconds(g.optString("createdAt", null));
 
                     boolean anonymous = g.optBoolean("isAnonymous", false);
