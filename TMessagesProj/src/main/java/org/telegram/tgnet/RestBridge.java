@@ -1145,7 +1145,43 @@ public class RestBridge {
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getFeaturedEmojiStickers) {
-                complete(onComplete, new TLRPC.TL_messages_featuredStickers(), null);
+                // "trending emoji": the server's featured animated packs (logos, game icons...), each
+                // with a preview; adding one saves it like any pack (installStickerSet)
+                executor.execute(() -> {
+                    TLRPC.TL_messages_featuredStickers res = new TLRPC.TL_messages_featuredStickers();
+                    try {
+                        JSONArray list = requestArray("GET", "/stickers/featured-emoji", null, true);
+                        for (int i = 0; i < list.length(); i++) {
+                            JSONObject js = list.getJSONObject(i);
+                            String mongoId = js.getString("_id");
+                            long tlId = idFromMongoId(mongoId) ^ 0x4000000000000000L;
+                            stickerSetMongoIdById.put(tlId, mongoId);
+                            emojiSetIds.add(tlId);
+                            TLRPC.TL_stickerSet set = new TLRPC.TL_stickerSet();
+                            set.id = tlId;
+                            set.access_hash = 1;
+                            set.title = js.optString("title", "Emoji");
+                            set.short_name = js.optString("shortName", mongoId) + "_emoji";
+                            set.emojis = true;
+                            set.count = js.optInt("count", 0);
+                            if (js.optBoolean("installed", false)) set.installed_date = (int) (System.currentTimeMillis() / 1000L);
+                            stickerSetMetaById.put(tlId, new String[]{set.title, "0"});
+                            TLRPC.TL_stickerSetFullCovered covered = new TLRPC.TL_stickerSetFullCovered();
+                            covered.set = set;
+                            JSONArray preview = js.optJSONArray("preview");
+                            for (int k = 0; preview != null && k < preview.length(); k++) {
+                                covered.documents.add(buildCustomEmojiDocument(absoluteUrl(preview.getString(k)), set));
+                            }
+                            res.sets.add(covered);
+                        }
+                        savePeerMap("mediaMap", mediaUrlById);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    res.count = res.sets.size();
+                    res.hash = res.sets.size();
+                    complete(onComplete, res, null);
+                });
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_getFeaturedStickers) {
