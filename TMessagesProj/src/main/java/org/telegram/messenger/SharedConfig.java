@@ -814,13 +814,29 @@ public class SharedConfig {
         return true;
     }
 
+    private static int versionPart(String part) {
+        String digits = part == null ? "" : part.replaceAll("[^0-9]", "");
+        if (digits.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(digits.length() > 9 ? digits.substring(0, 9) : digits);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     // returns a >= b
     public static boolean versionBiggerOrEqual(String a, String b) {
+        if (a == null || b == null) {
+            return b == null;
+        }
         String[] partsA = a.split("\\.");
         String[] partsB = b.split("\\.");
         for (int i = 0; i < Math.min(partsA.length, partsB.length); ++i) {
-            int numA = Integer.parseInt(partsA[i]);
-            int numB = Integer.parseInt(partsB[i]);
+            // our server's version names aren't always plain numbers ("build 52" crashed the app on every start)
+            int numA = versionPart(partsA[i]);
+            int numB = versionPart(partsB[i]);
             if (numA < numB) {
                 return false;
             } else if (numA > numB) {
