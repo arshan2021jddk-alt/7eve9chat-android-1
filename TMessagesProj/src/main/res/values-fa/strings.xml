@@ -753,7 +753,7 @@
     <string name="ArticleByAuthor">توسط \u2068%1$s\u2069</string>
     <string name="ArticleDateByAuthor">\u2068%1$s\u2069 توسط \u2068%2$s\u2069</string>
     <string name="AskAQuestion">پرسیدن سؤال</string>
-    <string name="AskAQuestionInfo">لطفاً توجه داشته باشید که پشتیبانی مشاهیر توسط داوطلبان انجام می\u200cشود. ما سعی می\u200cکنیم هر چه سریع\u200cتر پاسخگو باشیم، اما ممکن است مدتی طول بکشد.\n\nلطفاً به صفحه &lt;![CDATA[&lt;a href=\"https://telegram.org/faq/fa#a\"&gt;پرسش\u200cهای متداول مشاهیر&lt;/a&gt;]]&gt; سری بزنید: این بخش حاوی پاسخ به اکثر پرسش\u200cها و توصیه\u200cهای مهمی برای &lt;![CDATA[&lt;a href=\"https://telegram.org/faq/fa#j\"&gt;عیب\u200cیابی&lt;/a&gt;]]&gt; است.</string>
+    <string name="AskAQuestionInfo">لطفاً توجه داشته باشید که پشتیبانی مشاهیر توسط داوطلبان انجام می\u200cشود. ما سعی می\u200cکنیم هر چه سریع\u200cتر پاسخگو باشیم، اما ممکن است مدتی طول بکشد.\n\nلطفاً به صفحه <![CDATA[<a href=\"https://telegram.org/faq/fa#a\">پرسش\u200cهای متداول مشاهیر</a>]]> سری بزنید: این بخش حاوی پاسخ به اکثر پرسش\u200cها و توصیه\u200cهای مهمی برای <![CDATA[<a href=\"https://telegram.org/faq/fa#j\">عیب\u200cیابی</a>]]> است.</string>
     <string name="AskButton">پرسش از یک داوطلب</string>
     <string name="AttachAudio">پیام صوتی</string>
     <string name="AttachAudioRestricted">مدیران این گروه، شما را از ارسال موزیک در اینجا تا \u2068%1$s\u2069 محروم کرده\u200cاند.</string>
@@ -2129,7 +2129,7 @@
     <string name="ChatYourSelfTitle">فضای ذخیره\u200cسازی ابری شما</string>
     <string name="ChatsArchived">گفتگوها بایگانی شدند.</string>
     <string name="ChatsDeletedUndo">گفتگوها حذف شدند.</string>
-    <string name="ChatsLeaveAlert">&lt;![CDATA[آیا از ترک کردن گفتگوهای انتخاب شده اطمینان دارید؟]]&gt;</string>
+    <string name="ChatsLeaveAlert"><![CDATA[آیا از ترک کردن گفتگوهای انتخاب شده اطمینان دارید؟]]></string>
     <string name="ChatsMute">بی\u200cصدا کردن</string>
     <string name="ChatsUnmute">صدادار کردن</string>
     <string name="CheckPassword">بررسی گذرواژه</string>
@@ -7188,7 +7188,7 @@
     <string name="SendMediaPermissionMusic">موزیک\u200cها</string>
     <string name="SendMediaPermissionPhotos">عکس\u200cها</string>
     <string name="SendMediaPermissionRound">پیام\u200cهای ویدیویی</string>
-    <string name="SendMediaPermissionStickersGifs">&lt;![CDATA[استیکرها و گیف\u200cها]]&gt;</string>
+    <string name="SendMediaPermissionStickersGifs"><![CDATA[استیکرها و گیف\u200cها]]></string>
     <string name="SendMediaPermissionVideos">ویدیوها</string>
     <string name="SendMediaPermissionVoice">پیام\u200cهای صوتی</string>
     <string name="SendMediaPolls">نظرسنجی\u200cها</string>
