@@ -267,16 +267,7 @@
                 <data android:host="t.me" android:scheme="http" />
                 <data android:host="t.me" android:scheme="https" />
             </intent-filter>
-            <!-- 7eve9craft.ir links open in the app directly (App Links: https://7eve9craft.ir/.well-known/assetlinks.json) -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" />
-                <data android:scheme="http" />
-                <data android:host="7eve9craft.ir" />
-                <data android:host="www.7eve9craft.ir" />
-            </intent-filter>
+            <!-- Mashahir: no App Links to the school site (it is the website / portal in a browser) -->
             <intent-filter android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:priority="1">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT" />

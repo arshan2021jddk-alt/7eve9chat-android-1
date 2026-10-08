@@ -66,7 +66,10 @@ import java.util.concurrent.Executors;
  */
 public class RestBridge {
 
-    public static final String BASE_URL = "https://7eve9craft.ir/api";
+    // Mashahir (school build): the school server. For a real domain change SITE only.
+    public static final String SITE = "http://217.18.90.246:8090";
+    public static final String SITE_HOST = SITE.replaceFirst("^https?://", "");
+    public static final String BASE_URL = SITE + "/api";
 
     private static final RestBridge[] instances = new RestBridge[UserConfig.MAX_ACCOUNT_COUNT];
 
@@ -326,7 +329,7 @@ public class RestBridge {
         TLRPC.TL_messages_availableReactions result = new TLRPC.TL_messages_availableReactions();
         result.hash = 7979;
         for (String[] r : REACTIONS) {
-            String base = "https://7eve9craft.ir/uploads/reactions/" + r[1];
+            String base = SITE + "/uploads/reactions/" + r[1];
             TLRPC.TL_document loop = buildTgsDocument(base + ".tgs");
             TLRPC.TL_document appear = buildTgsDocument(base + "_appear.tgs");
             TLRPC.TL_document effect = buildTgsDocument(base + "_effect.tgs");
@@ -1440,7 +1443,7 @@ public class RestBridge {
                 TLRPC.Chat chat = org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(req.channel.channel_id);
                 String where = chat != null && chat.username != null ? chat.username : convId;
                 String msgMongo = messageMongoIdByTlId.get(req.id);
-                link.link = "https://7eve9craft.ir/" + (chat != null && chat.megagroup ? "gp/" : "cl/") + where + (msgMongo != null ? "?msg=" + msgMongo : "");
+                link.link = SITE + "/" + (chat != null && chat.megagroup ? "gp/" : "cl/") + where + (msgMongo != null ? "?msg=" + msgMongo : "");
                 link.html = "";
                 complete(onComplete, link, null);
                 return true;
@@ -2378,6 +2381,34 @@ public class RestBridge {
             } catch (Exception e) {
                 FileLog.e(e);
                 complete(onComplete, null, genericError(e));
+            }
+        });
+    }
+
+    // Mashahir: school sign-in (student code / national id / username + the school password)
+    // -> POST /school/login, the same answer as the code sign-in (token + user)
+    public void schoolLogin(String login, String password, RequestDelegate onComplete) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("login", login);
+                body.put("password", password);
+                body.put("deviceModel", android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
+                body.put("deviceId", android.provider.Settings.Secure.getString(
+                        ApplicationLoader.applicationContext.getContentResolver(),
+                        android.provider.Settings.Secure.ANDROID_ID));
+                completeLogin(request("POST", "/school/login", body, false), onComplete);
+            } catch (RestException e) {
+                TLRPC.TL_error err = new TLRPC.TL_error();
+                err.code = e.statusCode;
+                err.text = e.message != null && !e.message.isEmpty() ? e.message : "خطا در ورود";
+                complete(onComplete, null, err);
+            } catch (Exception e) {
+                FileLog.e(e);
+                TLRPC.TL_error err = new TLRPC.TL_error();
+                err.code = 500;
+                err.text = "اتصال به سرور هنرستان برقرار نشد";
+                complete(onComplete, null, err);
             }
         });
     }
@@ -6893,7 +6924,7 @@ public class RestBridge {
     // Invite links: one permanent link per chat on this backend.
     private TLRPC.TL_chatInviteExported buildInvite(String code, long adminId, boolean revoked) {
         TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-        invite.link = "https://7eve9craft.ir/invite/" + code;
+        invite.link = SITE + "/invite/" + code;
         invite.admin_id = adminId;
         invite.permanent = true;
         invite.revoked = revoked;
@@ -7468,7 +7499,7 @@ public class RestBridge {
         status.boosts = unlocked ? 100 : 0;
         status.next_level_boosts = unlocked ? 100 : 1;
         status.flags |= 1;
-        status.boost_url = "https://7eve9craft.ir";
+        status.boost_url = SITE;
         complete(onComplete, status, null);
     }
 
@@ -9782,7 +9813,7 @@ public class RestBridge {
                         case "join_request_approved": {
                             if (targetId == 0) continue;
                             TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-                            invite.link = "https://7eve9craft.ir/";
+                            invite.link = SITE + "/";
                             invite.admin_id = actorId;
                             TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest a = new TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest();
                             a.invite = invite;
@@ -10702,7 +10733,7 @@ public class RestBridge {
 
                     TLRPC.TL_sponsoredMessage msg = new TLRPC.TL_sponsoredMessage();
                     msg.random_id = ad.getString("_id").getBytes(StandardCharsets.UTF_8);
-                    msg.url = ad.optString("link", "https://7eve9craft.ir");
+                    msg.url = ad.optString("link", SITE);
                     msg.title = ad.optString("title", "");
                     msg.message = ad.optString("description", "");
                     msg.button_text = "Learn More";
@@ -11058,7 +11089,7 @@ public class RestBridge {
                 String code = resp.optString("inviteCode", "");
 
                 TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-                invite.link = "https://7eve9craft.ir/invite/" + code;
+                invite.link = SITE + "/invite/" + code;
                 invite.admin_id = selfMongoId != null ? idFromMongoId(selfMongoId) : 0;
                 invite.date = (int) (System.currentTimeMillis() / 1000L);
                 invite.permanent = true;
@@ -12355,7 +12386,7 @@ public class RestBridge {
         if (!maybeRelative.startsWith("/")) {
             maybeRelative = "/" + maybeRelative;
         }
-        return "https://7eve9craft.ir" + maybeRelative;
+        return SITE + maybeRelative;
     }
 
     // Full profile photo; with a video avatar it also carries a "u" video

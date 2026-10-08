@@ -1,10 +1,10 @@
-name: Build APK
+name: Build APK (Mashahir)
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - mashahir
 
 permissions:
   contents: write
@@ -142,16 +142,16 @@ jobs:
           echo "Uploading APK files:"
           printf ' - %s\n' "${APK_FILES[@]}"
 
-          gh release delete latest-build \
+          gh release delete mashahir-build \
             --yes \
             --repo "${GITHUB_REPOSITORY}" \
             || true
 
-          git tag -f latest-build
-          git push -f origin latest-build
+          git tag -f mashahir-build
+          git push -f origin mashahir-build
 
-          gh release create latest-build \
+          gh release create mashahir-build \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Latest debug build" \
+            --title "Mashahir build" --prerelease \
             --notes "Run ${GITHUB_RUN_ID} versionCode=$(( (7089 + GITHUB_RUN_NUMBER) * 10 + 9 )) commit=${GITHUB_SHA::8}" \
             "${APK_FILES[@]}"

@@ -832,7 +832,135 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             fillNextCodeParams(cancelDeletionParams, cancelDeletionCode, false);
         }
 
+        if (activityMode == MODE_LOGIN && !isInCancelAccountDeletionMode()) {
+            addSchoolLogin(context);
+        }
         return fragmentView;
+    }
+
+    // Mashahir: accounts come from the school - sign in with the student code / national id /
+    // username and the school's password (the phone + SMS pages stay hidden under this one)
+    private void addSchoolLogin(Context context) {
+        FrameLayout overlay = new FrameLayout(context);
+        overlay.setClickable(true);
+        overlay.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        android.widget.ScrollView scroll = new android.widget.ScrollView(context);
+        scroll.setFillViewport(true);
+        LinearLayout col = new LinearLayout(context);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(dp(28), dp(56), dp(28), dp(28));
+        scroll.addView(col, new android.widget.ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        overlay.addView(scroll, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+
+        android.widget.ImageView logo = new android.widget.ImageView(context);
+        logo.setImageResource(R.drawable.school_logo);
+        logo.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        col.addView(logo, LayoutHelper.createLinear(112, 112, Gravity.CENTER_HORIZONTAL, 0, 0, 0, 20));
+
+        TextView title = new TextView(context);
+        title.setText("ورود به پیام‌رسان هنرستان");
+        title.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 21);
+        title.setTypeface(AndroidUtilities.bold());
+        title.setGravity(Gravity.CENTER);
+        col.addView(title, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        TextView subtitle = new TextView(context);
+        subtitle.setText("هنرستان مشاهیر صنعت فولادشهر\nبا کد هنرجویی، کد ملی یا نام کاربری و رمزی که هنرستان به شما داده وارد شوید.");
+        subtitle.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText6));
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setLineSpacing(dp(2), 1f);
+        col.addView(subtitle, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 8, 0, 28));
+
+        EditTextBoldCursor loginField = schoolField(context, "کد هنرجویی / کد ملی / نام کاربری", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        col.addView(loginField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 0, 0, 12));
+        EditTextBoldCursor passField = schoolField(context, "رمز عبور", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passField.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        col.addView(passField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 52, 0, 0, 0, 8));
+
+        TextView error = new TextView(context);
+        error.setTextColor(Theme.getColor(Theme.key_text_RedRegular));
+        error.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        error.setGravity(Gravity.CENTER);
+        error.setVisibility(View.GONE);
+        col.addView(error, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 4, 0, 4));
+
+        TextView button = new TextView(context);
+        button.setText("ورود");
+        button.setGravity(Gravity.CENTER);
+        button.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText));
+        button.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+        button.setTypeface(AndroidUtilities.bold());
+        button.setBackground(Theme.AdaptiveRipple.filledRectByKey(Theme.key_featuredStickers_addButton, 10));
+        col.addView(button, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 50, 0, 16, 0, 0));
+
+        TextView help = new TextView(context);
+        help.setText("رمز را فراموش کرده‌اید؟ به دفتر هنرستان مراجعه کنید.");
+        help.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText6));
+        help.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
+        help.setGravity(Gravity.CENTER);
+        col.addView(help, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 20, 0, 0));
+
+        final boolean[] busy = new boolean[1];
+        Runnable submit = () -> {
+            if (busy[0]) return;
+            String login = loginField.getText().toString().trim();
+            String password = passField.getText().toString();
+            if (login.isEmpty() || password.isEmpty()) {
+                error.setText("کد / نام کاربری و رمز را وارد کنید");
+                error.setVisibility(View.VISIBLE);
+                return;
+            }
+            busy[0] = true;
+            error.setVisibility(View.GONE);
+            button.setText("در حال ورود…");
+            button.setAlpha(0.7f);
+            AndroidUtilities.hideKeyboard(passField);
+            org.telegram.tgnet.RestBridge.getInstance(currentAccount).schoolLogin(login, password, (response, err) -> AndroidUtilities.runOnUIThread(() -> {
+                busy[0] = false;
+                button.setText("ورود");
+                button.setAlpha(1f);
+                if (response instanceof TLRPC.TL_auth_authorization) {
+                    onAuthSuccess((TLRPC.TL_auth_authorization) response, false);
+                } else {
+                    error.setText(err != null && err.text != null ? err.text : "ورود ناموفق بود");
+                    error.setVisibility(View.VISIBLE);
+                }
+            }));
+        };
+        button.setOnClickListener(v -> submit.run());
+        passField.setOnEditorActionListener((v, actionId, event) -> {
+            submit.run();
+            return true;
+        });
+
+        ((ViewGroup) fragmentView).addView(overlay, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        AndroidUtilities.runOnUIThread(() -> {
+            loginField.requestFocus();
+            AndroidUtilities.showKeyboard(loginField);
+        }, 400);
+    }
+
+    private EditTextBoldCursor schoolField(Context context, String hint, int inputType) {
+        EditTextBoldCursor field = new EditTextBoldCursor(context);
+        field.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 17);
+        field.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        field.setHintColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
+        field.setHintText(hint);
+        field.setCursorColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        field.setCursorSize(dp(20));
+        field.setCursorWidth(1.5f);
+        field.setLineColors(Theme.getColor(Theme.key_windowBackgroundWhiteInputField), Theme.getColor(Theme.key_windowBackgroundWhiteInputFieldActivated), Theme.getColor(Theme.key_text_RedRegular));
+        field.setBackground(null);
+        field.setInputType(inputType);
+        field.setSingleLine(true);
+        field.setMaxLines(1);
+        field.setPadding(0, dp(6), 0, dp(6));
+        field.setGravity(Gravity.CENTER_VERTICAL | (LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT));
+        field.setTextDirection(View.TEXT_DIRECTION_LTR);
+        return field;
     }
 
     private boolean isCustomKeyboardForceDisabled() {

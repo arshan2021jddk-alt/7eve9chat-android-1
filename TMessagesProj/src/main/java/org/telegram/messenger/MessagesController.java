@@ -1584,7 +1584,7 @@ public class MessagesController extends BaseController implements NotificationCe
         maxFaveStickersCount = mainPreferences.getInt("maxFaveStickersCount", 5);
         maxEditTime = mainPreferences.getInt("maxEditTime", 3600);
         ratingDecay = mainPreferences.getInt("ratingDecay", 2419200);
-        linkPrefix = "7eve9craft.ir"; // 7eve9chat: our own links, never t.me
+        linkPrefix = org.telegram.tgnet.RestBridge.SITE_HOST; // 7eve9chat: our own links, never t.me
         callReceiveTimeout = mainPreferences.getInt("callReceiveTimeout", 20000);
         callRingTimeout = mainPreferences.getInt("callRingTimeout", 90000);
         callConnectTimeout = mainPreferences.getInt("callConnectTimeout", 30000);
@@ -5695,7 +5695,7 @@ public class MessagesController extends BaseController implements NotificationCe
             revokeTimeLimit = config.revoke_time_limit;
             revokeTimePmLimit = config.revoke_pm_time_limit;
             canRevokePmInbox = config.revoke_pm_inbox;
-            linkPrefix = "7eve9craft.ir"; // 7eve9chat: ignore me_url_prefix (t.me)
+            linkPrefix = org.telegram.tgnet.RestBridge.SITE_HOST; // 7eve9chat: ignore me_url_prefix (t.me)
             boolean forceTryIpV6 = config.force_try_ipv6;
             if (linkPrefix.endsWith("/")) {
                 linkPrefix = linkPrefix.substring(0, linkPrefix.length() - 1);

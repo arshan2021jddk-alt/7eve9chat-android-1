@@ -30,7 +30,7 @@ import java.util.ArrayList;
  */
 public class SocketBridge {
 
-    private static final String SOCKET_URL = "https://7eve9craft.ir";
+    private static final String SOCKET_URL = org.telegram.tgnet.RestBridge.SITE;
 
     private static final SocketBridge[] instances = new SocketBridge[UserConfig.MAX_ACCOUNT_COUNT];
 

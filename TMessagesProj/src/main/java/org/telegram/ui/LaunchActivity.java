@@ -269,7 +269,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             return null;
         }
         String host = uri.getHost().toLowerCase();
-        if (!host.equals("7eve9craft.ir") && !host.equals("www.7eve9craft.ir")) {
+        if (!host.equals(Uri.parse(org.telegram.tgnet.RestBridge.SITE).getHost())) {
             return null;
         }
         String path = uri.getPath() == null ? "" : uri.getPath();

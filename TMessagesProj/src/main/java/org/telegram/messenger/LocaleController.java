@@ -602,6 +602,17 @@ public class LocaleController {
         languages.add(localeInfo);
         languagesDict.put(localeInfo.shortName, localeInfo);
 
+        // Mashahir: Persian is built in (res/values-fa) and the default
+        localeInfo = new LocaleInfo();
+        localeInfo.name = "فارسی";
+        localeInfo.nameEnglish = "Persian";
+        localeInfo.shortName = localeInfo.pluralLangCode = "fa";
+        localeInfo.pathToFile = null;
+        localeInfo.builtIn = true;
+        localeInfo.isRtl = true;
+        languages.add(localeInfo);
+        languagesDict.put(localeInfo.shortName, localeInfo);
+
         localeInfo = new LocaleInfo();
         localeInfo.name = "Italiano";
         localeInfo.nameEnglish = "Italian";
@@ -738,6 +749,9 @@ public class LocaleController {
                 }
             }
 
+            if (currentInfo == null) {
+                currentInfo = getLanguageFromDict("fa"); // Mashahir: Persian unless the user picked another language
+            }
             if (currentInfo == null && systemDefaultLocale.getLanguage() != null) {
                 currentInfo = getLanguageFromDict(systemDefaultLocale.getLanguage());
             }
