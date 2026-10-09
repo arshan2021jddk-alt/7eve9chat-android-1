@@ -44,7 +44,7 @@ android {
 
     androidResources {
         noCompress += "pack"
-        localeFilters += ["zz"]
+        localeFilters += ["zz", "fa"] // Mashahir: Persian is built in
     }
 
     signingConfigs {

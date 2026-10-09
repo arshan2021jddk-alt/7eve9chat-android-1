@@ -551,7 +551,8 @@ public class RestBridge {
                 java.io.FileInputStream in = new java.io.FileInputStream(file);
                 int n = in.read(data);
                 in.close();
-                request("POST", "/crash", new JSONObject().put("report", new String(data, 0, Math.max(n, 0), StandardCharsets.UTF_8)), true);
+                // Mashahir: before sign-in the report goes to the school's open endpoint
+                request("POST", authToken != null ? "/crash" : "/school/crash", new JSONObject().put("report", new String(data, 0, Math.max(n, 0), StandardCharsets.UTF_8)), authToken != null);
                 file.delete();
             } catch (Exception e) {
                 FileLog.e(e);
@@ -1498,7 +1499,7 @@ public class RestBridge {
                 boolean premium = org.telegram.messenger.UserConfig.getInstance(currentAccount).isPremium();
                 promo.status_text = premium
                         ? (fa ? "اشتراک Premium شما فعال است." : "Your Premium subscription is active.")
-                        : (fa ? "Premium توسط تیم 7eve9Chat فعال می‌شود." : "Premium is activated by the 7eve9Chat team.");
+                        : (fa ? "Premium توسط تیم Mashahir فعال می‌شود." : "Premium is activated by the Mashahir team.");
                 promo.currency = "USD";
                 complete(onComplete, promo, null);
                 return true;
@@ -1517,7 +1518,7 @@ public class RestBridge {
                             up.version = u.optString("version", String.valueOf(up.id));
                             up.text = u.optString("notes", "");
                             up.can_not_skip = u.optBoolean("force", false);
-                            TLRPC.TL_messageMediaDocument media = buildDocumentMedia(absoluteUrl(url), "application/vnd.android.package-archive", "7eve9Chat-" + up.version + ".apk", "file");
+                            TLRPC.TL_messageMediaDocument media = buildDocumentMedia(absoluteUrl(url), "application/vnd.android.package-archive", "Mashahir-" + up.version + ".apk", "file");
                             media.document.size = u.optLong("size", media.document.size);
                             up.document = media.document;
                             up.flags |= TLObject.FLAG_1;
@@ -2385,6 +2386,19 @@ public class RestBridge {
         });
     }
 
+    // Mashahir: the sign-in page is up - tell the server (so a broken connection shows in its log) and
+    // send a crash from before sign-in, if there is one
+    public void schoolHello() {
+        executor.execute(() -> {
+            try {
+                request("GET", "/school/info?client=android-" + android.os.Build.VERSION.SDK_INT, null, false);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+        sendPendingCrashReport();
+    }
+
     // Mashahir: school sign-in (student code / national id / username + the school password)
     // -> POST /school/login, the same answer as the code sign-in (token + user)
     public void schoolLogin(String login, String password, RequestDelegate onComplete) {
@@ -2579,7 +2593,7 @@ public class RestBridge {
                     auth.device_model = r.optString("deviceModel", "Web");
                     auth.platform = "Web";
                     auth.system_version = "";
-                    auth.app_name = "7eve9Chat Web";
+                    auth.app_name = "Mashahir Web";
                     auth.app_version = "";
                     auth.ip = r.optString("ip", "");
                     auth.country = "";
@@ -6041,7 +6055,7 @@ public class RestBridge {
                     auth.platform = "Android";
                     auth.system_version = "";
                     auth.api_id = 0;
-                    auth.app_name = "7eve9Chat";
+                    auth.app_name = "Mashahir";
                     auth.app_version = "";
                     auth.date_created = parseIsoToEpochSeconds(d.optString("lastActive", null));
                     auth.date_active = parseIsoToEpochSeconds(d.optString("lastActive", null));

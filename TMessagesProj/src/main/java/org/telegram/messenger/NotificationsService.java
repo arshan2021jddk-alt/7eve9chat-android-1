@@ -40,7 +40,7 @@ public class NotificationsService extends Service {
         }
     }
 
-    private static final String KEEP_ALIVE_CHANNEL = "7eve9_keepalive";
+    private static final String KEEP_ALIVE_CHANNEL = "mashahir_keepalive";
 
     private void startKeepAliveForeground() {
         if (Build.VERSION.SDK_INT < 26) {
@@ -49,7 +49,7 @@ public class NotificationsService extends Service {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm.getNotificationChannel(KEEP_ALIVE_CHANNEL) == null) {
-                NotificationChannel channel = new NotificationChannel(KEEP_ALIVE_CHANNEL, "7eve9Chat connection", NotificationManager.IMPORTANCE_MIN);
+                NotificationChannel channel = new NotificationChannel(KEEP_ALIVE_CHANNEL, "Mashahir connection", NotificationManager.IMPORTANCE_MIN);
                 channel.setShowBadge(false);
                 channel.setSound(null, null);
                 nm.createNotificationChannel(channel);
@@ -60,7 +60,7 @@ public class NotificationsService extends Service {
             boolean fa = "fa".equals(LocaleController.getInstance().getCurrentLocale().getLanguage());
             Notification notification = new NotificationCompat.Builder(this, KEEP_ALIVE_CHANNEL)
                     .setSmallIcon(R.drawable.notification)
-                    .setContentTitle("7eve9Chat")
+                    .setContentTitle("Mashahir")
                     .setContentText(fa ? "متصل — پیام‌های جدید را دریافت می‌کنید" : "Connected - you will receive new messages")
                     .setPriority(NotificationCompat.PRIORITY_MIN)
                     .setOngoing(true)

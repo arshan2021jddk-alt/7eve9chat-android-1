@@ -840,6 +840,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
     // Mashahir: accounts come from the school - sign in with the student code / national id /
     // username and the school's password (the phone + SMS pages stay hidden under this one)
+    private View schoolOverlay;
+
     private void addSchoolLogin(Context context) {
         FrameLayout overlay = new FrameLayout(context);
         overlay.setClickable(true);
@@ -937,6 +939,11 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         });
 
         ((ViewGroup) fragmentView).addView(overlay, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        // always above the phone / code pages, even when one of them is brought to the front
+        overlay.setElevation(dp(64));
+        overlay.setTranslationZ(dp(64));
+        schoolOverlay = overlay;
+        org.telegram.tgnet.RestBridge.getInstance(currentAccount).schoolHello();
         AndroidUtilities.runOnUIThread(() -> {
             loginField.requestFocus();
             AndroidUtilities.showKeyboard(loginField);
@@ -1046,6 +1053,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     @Override
     public void onResume() {
         super.onResume();
+        if (schoolOverlay != null) {
+            schoolOverlay.bringToFront(); // Mashahir: the school sign-in stays on top
+        }
         if (newAccount) {
             ConnectionsManager.getInstance(currentAccount).setAppPaused(false, false);
         }

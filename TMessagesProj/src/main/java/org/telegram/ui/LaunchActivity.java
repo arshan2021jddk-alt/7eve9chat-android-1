@@ -1118,10 +1118,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     }
 
     private BaseFragment getClientNotActivatedFragment() {
-        if (LoginActivity.loadCurrentState(false, currentAccount).getInt("currentViewNum", 0) != 0) {
-            return new LoginActivity();
-        }
-        return new IntroActivity();
+        return new LoginActivity(); // Mashahir: the school sign-in, no intro slides
     }
 
     public FireworksOverlay getFireworksOverlay() {
@@ -1290,7 +1287,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                 layersActionBarLayout.rebuildLogout();
                 rightActionBarLayout.rebuildLogout();
             }
-            presentFragment(new IntroActivity().setOnLogout());
+            presentFragment(new LoginActivity()); // Mashahir: back to the school sign-in
         }
     }
 
@@ -7023,7 +7020,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             boolean fa = "fa".equals(LocaleController.getInstance().getCurrentLocale().getLanguage());
             AlertDialog.Builder builder = new AlertDialog.Builder(LaunchActivity.this);
             builder.setTitle(fa ? "دریافت پیام‌ها در پس‌زمینه" : "Messages in the background");
-            builder.setMessage(fa ? "برای اینکه وقتی برنامه بسته است هم پیام‌های جدید را دریافت کنید، اجازه دهید 7eve9Chat در پس‌زمینه فعال بماند." : "To receive new messages while the app is closed, allow 7eve9Chat to stay active in the background.");
+            builder.setMessage(fa ? "برای اینکه وقتی برنامه بسته است هم پیام‌های جدید را دریافت کنید، اجازه دهید Mashahir در پس‌زمینه فعال بماند." : "To receive new messages while the app is closed, allow Mashahir to stay active in the background.");
             builder.setPositiveButton(fa ? "اجازه می‌دهم" : "Allow", (d, w) -> {
                 try {
                     Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
