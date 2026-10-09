@@ -940,6 +940,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
         ((ViewGroup) fragmentView).addView(overlay, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
         // always above the phone / code pages, even when one of them is brought to the front
+        // the phone pages may have blocked the system keyboard for the window: undo that
+        keyboardView.setVisibility(View.GONE);
+        AndroidUtilities.removeAltFocusable(getParentActivity(), classGuid);
         overlay.setElevation(dp(64));
         overlay.setTranslationZ(dp(64));
         schoolOverlay = overlay;
@@ -971,6 +974,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     }
 
     private boolean isCustomKeyboardForceDisabled() {
+        // Mashahir: the school sign-in types letters and passwords - the system keyboard, never the phone pad
+        if (activityMode == MODE_LOGIN) return true;
         return /*AndroidUtilities.displaySize.x > AndroidUtilities.displaySize.y || AndroidUtilities.isTablet() || */ AndroidUtilities.isAccessibilityTouchExplorationEnabled();
     }
 
@@ -1055,6 +1060,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         super.onResume();
         if (schoolOverlay != null) {
             schoolOverlay.bringToFront(); // Mashahir: the school sign-in stays on top
+            AndroidUtilities.removeAltFocusable(getParentActivity(), classGuid);
         }
         if (newAccount) {
             ConnectionsManager.getInstance(currentAccount).setAppPaused(false, false);
