@@ -67,7 +67,7 @@ import java.util.concurrent.Executors;
 public class RestBridge {
 
     // Mashahir (school build): the school server. For a real domain change SITE only.
-    public static final String SITE = "http://217.18.90.246:8090";
+    public static final String SITE = "https://217.18.90.246:8443";
     public static final String SITE_HOST = SITE.replaceFirst("^https?://", "");
     public static final String BASE_URL = SITE + "/api";
 
