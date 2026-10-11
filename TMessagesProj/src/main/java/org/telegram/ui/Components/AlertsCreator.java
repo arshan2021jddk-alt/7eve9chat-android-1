@@ -2075,6 +2075,10 @@ public class AlertsCreator {
     }
 
     public static void createBotLaunchAlert(BaseFragment fragment, TLRPC.User user, Runnable onConfirm, Runnable onDismiss) {
+        if (user != null && user.verified) { // Mashahir: the school's own (verified) bots open without the terms prompt
+            if (onConfirm != null) onConfirm.run();
+            return;
+        }
         Context context = fragment.getContext();
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
 
@@ -2185,6 +2189,11 @@ public class AlertsCreator {
 
     public static void createBotLaunchAlert(BaseFragment fragment, AtomicBoolean allowWrite, TLRPC.User user, Runnable loadBotSheet) {
         if (fragment == null) {
+            return;
+        }
+        if (user != null && user.verified) { // Mashahir: the school's own (verified) bots open without the terms prompt
+            if (allowWrite != null) allowWrite.set(true);
+            if (loadBotSheet != null) loadBotSheet.run();
             return;
         }
         Context context = fragment.getContext();

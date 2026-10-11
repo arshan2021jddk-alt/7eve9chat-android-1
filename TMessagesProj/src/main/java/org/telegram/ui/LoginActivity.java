@@ -3395,7 +3395,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
         private boolean numberFilled;
         public void fillNumber() {
-            if (numberFilled || activityMode != MODE_LOGIN) {
+            // Mashahir: the school sign-in never uses the SIM number, so don't ask for phone permissions
+            if (numberFilled || activityMode != MODE_LOGIN || schoolOverlay != null) {
                 return;
             }
             try {

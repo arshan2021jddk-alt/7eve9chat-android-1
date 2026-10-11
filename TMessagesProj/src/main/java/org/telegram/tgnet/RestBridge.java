@@ -13345,7 +13345,8 @@ public class RestBridge {
         }
 
         String phone = jsonStr(u, "phone");
-        if (phone != null && phone.length() > 0 && (self || !u.optBoolean("isPhoneHidden", false))) {
+        // Mashahir: school accounts have no real number (a hidden stand-in), not even for themselves
+        if (phone != null && phone.length() > 0 && !u.optBoolean("isPhoneHidden", false)) {
             user.phone = phone.replaceFirst("^0", "98");
             user.flags |= TLObject.FLAG_4; // phone present
         }
