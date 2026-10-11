@@ -257,6 +257,10 @@ public class GroupCreateActivity extends BaseFragment implements NotificationCen
 
     @Override
     public boolean onFragmentCreate() {
+        if (!isAlwaysShare && !isNeverShare && !isCall && chatType != ChatObject.CHAT_TYPE_USER) { // Mashahir: groups and their members are the school office's (portal)
+            MessagesController.schoolManagedGroupsNotice();
+            return false;
+        }
         getNotificationCenter().addObserver(this, NotificationCenter.contactsDidLoad);
         getNotificationCenter().addObserver(this, NotificationCenter.updateInterfaces);
         getNotificationCenter().addObserver(this, NotificationCenter.chatDidCreated);

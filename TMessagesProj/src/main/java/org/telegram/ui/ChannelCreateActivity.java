@@ -189,6 +189,10 @@ public class ChannelCreateActivity extends BaseFragment implements NotificationC
 
     @Override
     public boolean onFragmentCreate() {
+        if (currentStep == 0) { // Mashahir: channels are made by the school office (portal)
+            MessagesController.schoolManagedGroupsNotice();
+            return false;
+        }
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.chatDidCreated);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.chatDidFailCreate);
         if (currentStep == 1) {

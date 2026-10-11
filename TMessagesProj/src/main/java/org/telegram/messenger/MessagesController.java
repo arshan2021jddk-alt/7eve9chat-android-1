@@ -10051,7 +10051,17 @@ public class MessagesController extends BaseController implements NotificationCe
         }
     }
 
+    // Mashahir: the school decides who is in which group - nobody leaves, makes or joins groups here
+    public static void schoolManagedGroupsNotice() {
+        AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(ApplicationLoader.applicationContext,
+                "عضویت در گروه‌ها و کانال‌های مدرسه را دفتر هنرستان تعیین می‌کند", android.widget.Toast.LENGTH_LONG).show());
+    }
+
     protected void deleteDialog(long did, int first, int onlyHistory, int max_id, boolean revoke, TLRPC.InputPeer peer, long taskId) {
+        if (did < 0 && onlyHistory == 0 && first == 1) { // Mashahir: leaving a school group / channel
+            schoolManagedGroupsNotice();
+            return;
+        }
         if (onlyHistory == 2) {
             if (did == getUserConfig().getClientUserId()) {
                 getSavedMessagesController().deleteAllDialogs();
@@ -15859,6 +15869,10 @@ public class MessagesController extends BaseController implements NotificationCe
         if (peer == null) {
             return;
         }
+        if (peer instanceof TLRPC.TL_inputPeerUser && UserObject.isUserSelf(getUser(peer.user_id))) { // Mashahir: no leaving
+            schoolManagedGroupsNotice();
+            return;
+        }
         TLObject request;
         TLRPC.Chat ownerChat = getChat(chatId);
         boolean self = peer instanceof TLRPC.TL_inputPeerUser && UserObject.isUserSelf(getMessagesController().getUser(peer.user_id));
@@ -15929,6 +15943,10 @@ public class MessagesController extends BaseController implements NotificationCe
 
     public void deleteParticipantFromChat(long chatId, TLRPC.User user, TLRPC.Chat chat, boolean forceDelete, boolean revoke) {
         if (user == null && chat == null) {
+            return;
+        }
+        if (user != null && UserObject.isUserSelf(user)) { // Mashahir: no leaving
+            schoolManagedGroupsNotice();
             return;
         }
         TLRPC.InputPeer inputPeer;
