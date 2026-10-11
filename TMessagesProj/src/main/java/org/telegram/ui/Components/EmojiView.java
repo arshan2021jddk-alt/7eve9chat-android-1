@@ -293,7 +293,7 @@ public class EmojiView extends FrameLayout implements
         for (int i = 0; i < allTabs.size(); i++) {
             if (allTabs.get(i).type == TAB_EMOJI && allowEmoji) {
                 currentTabs.add(allTabs.get(i));
-            } if (allTabs.get(i).type == TAB_GIFS && allowGifs) {
+            } if (allTabs.get(i).type == TAB_GIFS && allowGifs && false) { // Mashahir: no GIFs
                 currentTabs.add(allTabs.get(i));
             }  if (allTabs.get(i).type == TAB_STICKERS && allowStickers) {
                 currentTabs.add(allTabs.get(i));
@@ -1580,6 +1580,7 @@ public class EmojiView extends FrameLayout implements
 
     public EmojiView(BaseFragment fragment, boolean needAnimatedEmoji, boolean needStickers, boolean needGif, final Context context, boolean needSearch, final TLRPC.ChatFull chatFull, ViewGroup parentView, boolean shouldDrawBackground, Theme.ResourcesProvider resourcesProvider, boolean frozenAtStart, boolean glassDesign) {
         super(context);
+        needGif = false; // Mashahir: no GIF tab (emoji and stickers only)
         this.shouldDrawBackground = shouldDrawBackground;
         this.fragment = fragment;
         this.allowAnimatedEmoji = needAnimatedEmoji;

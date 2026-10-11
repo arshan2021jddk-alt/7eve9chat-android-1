@@ -734,14 +734,15 @@ public class MessagesController extends BaseController implements NotificationCe
     public int transcribeButtonPressed;
     public boolean starsLocked;
 
+    // Mashahir: a school messenger - no Premium, Stars, gifts or Business anywhere
     public boolean starsPurchaseAvailable() {
-        return !starsLocked;
+        return false;
     }
     public boolean premiumFeaturesBlocked() {
-        return premiumLocked && !getUserConfig().isPremium();
+        return true;
     }
     public boolean premiumPurchaseBlocked() {
-        return premiumLocked;
+        return true;
     }
 
     public List<String> directPaymentsCurrency = new ArrayList<>();
@@ -23693,6 +23694,7 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean storiesEnabled() {
+        if (true) return false; // Mashahir: no stories in the school messenger
         switch (storiesPosting) {
             case "premium":
                 return getUserConfig().isPremium();

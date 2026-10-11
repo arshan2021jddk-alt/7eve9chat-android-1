@@ -285,10 +285,11 @@ public class StoriesController {
     }
 
     public boolean hasStories() {
-        return (dialogListStories != null && dialogListStories.size() > 0) || hasSelfStories();
+        return false; // Mashahir: no stories in the school messenger
     }
 
     public void loadStories() {
+        if (true) return; // Mashahir: no stories
         if (firstLoad) {
             loadingFromDatabase = true;
             storiesStorage.getAllStories(allStories -> {

@@ -13374,6 +13374,7 @@ public class RestBridge {
                     : org.telegram.messenger.MessagesController.getInstance(currentAccount).getUser(user.id);
             user.premium = known != null && known.premium;
         }
+        user.premium = false; // Mashahir: no Premium in the school messenger
         if (!u.has("emojiStatus") && user.emoji_status == null) {
             // same for the emoji status / worn gift
             TLRPC.User known = self ? org.telegram.messenger.UserConfig.getInstance(currentAccount).getCurrentUser()
