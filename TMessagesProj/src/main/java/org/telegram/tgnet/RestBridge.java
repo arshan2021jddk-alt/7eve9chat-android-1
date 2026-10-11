@@ -12711,6 +12711,13 @@ public class RestBridge {
         document.attributes.add(nameAttr);
 
         documentKindById.put(document.id, kind == null ? "file" : kind);
+        if ("application/x-tgsticker".equals(mimeType) && document.thumbs.isEmpty()) {
+            // The app only plays a .tgs as an animated sticker when the document has a thumbnail
+            // entry; without one a sent sticker showed up as a "file"
+            TLRPC.TL_photoSizeEmpty thumb = new TLRPC.TL_photoSizeEmpty();
+            thumb.type = "s";
+            document.thumbs.add(thumb);
+        }
         if ("gif".equals(kind)) {
             // Marks it as a GIF: autoplay + "Save to GIFs"
             document.attributes.add(new TLRPC.TL_documentAttributeAnimated());
