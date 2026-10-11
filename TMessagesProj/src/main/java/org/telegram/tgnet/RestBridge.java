@@ -5715,6 +5715,14 @@ public class RestBridge {
                         TLRPC.Message tlMessage = buildAnyMessage(lastMessage, dialog.peer); // service messages too
                         result.messages.add(tlMessage);
                         dialog.top_message = tlMessage.id;
+                        // Nothing unread: everything up to the last message is read. With read_inbox_max_id 0
+                        // the app counted the last incoming message as unread again after a restart.
+                        if (dialog.unread_count == 0) {
+                            dialog.read_inbox_max_id = tlMessage.id;
+                        }
+                        if (tlMessage.out && "read".equals(lastMessage.optString("status"))) {
+                            dialog.read_outbox_max_id = tlMessage.id;
+                        }
                     }
 
                     if (archiveFolder) {
