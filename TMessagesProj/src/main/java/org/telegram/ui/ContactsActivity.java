@@ -678,7 +678,8 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
                                 AccountFrozenAlert.show(currentAccount);
                                 return;
                             }
-                            presentFragment(new InviteContactsActivity());
+                            // Mashahir: the school portal bot instead of inviting phone contacts
+                            getMessagesController().openByUserName("portal", this, 0);
                         } else if (row == 1) {
                             presentFragment(new CallLogActivity());
                         }

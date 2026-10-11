@@ -890,7 +890,7 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
                 });
             }
 
-            if (currentChat.creator && (info == null || info.can_set_username)) {
+            if (false && currentChat.creator && (info == null || info.can_set_username)) { // Mashahir: school groups are never public
                 typeCell = new TextCell(context);
                 typeCell.setBackgroundDrawable(Theme.getSelectorDrawable(true));
                 typeEditContainer.addView(typeCell, LayoutHelper.createLinear(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -2454,7 +2454,7 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
             }
             reactionsCell.setVisibility(ChatObject.canChangeChatInfo(currentChat) ? View.VISIBLE : View.GONE);
             updateReactionsCell(animated);
-            if (info == null || !ChatObject.canUserDoAdminAction(currentChat, ChatObject.ACTION_INVITE) || (!isPrivate && currentChat.creator)) {
+            if (true || info == null || !ChatObject.canUserDoAdminAction(currentChat, ChatObject.ACTION_INVITE) || (!isPrivate && currentChat.creator)) { // Mashahir: no invite links
                 inviteLinksCell.setVisibility(View.GONE);
             } else {
                 if (info.invitesCount > 0) {

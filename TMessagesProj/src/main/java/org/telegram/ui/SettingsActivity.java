@@ -726,11 +726,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         if (items.get(items.size() - 1).viewType != UniversalAdapter.VIEW_TYPE_SHADOW)
             items.add(UItem.asShadow(null));
 
-        items.add(UItem.asHeader(getString(R.string.SettingsHelp)));
-        // 7eve9Chat: "Ask a Question" = chat with @admin, "Features" = the official channel;
-        // no FAQ / privacy policy pages and no debug section.
-        items.add(SettingCell.Factory.of(17, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_ask, getString(R.string.AskAQuestion)));
-        items.add(SettingCell.Factory.of(23, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_features, getString(R.string.TelegramFeatures)));
+        // Mashahir: no help section - it pointed at 7eve9Chat's support account and channel
 
         items.add(UItem.asCustomShadow(versionView));
     }

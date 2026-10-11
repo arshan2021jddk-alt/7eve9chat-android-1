@@ -562,7 +562,7 @@ public class ContactsAdapter extends RecyclerListView.SectionsAdapter {
                 if (section == 0) {
                     if (needPhonebook) {
                         if (position == 0) {
-                            textCell.setTextAndValueAndColorfulIcon(getString(R.string.InviteFriends), "", false, R.drawable.settings_invite, 0xFF1CA5ED, 0xFF1488E1, false);
+                            textCell.setTextAndValueAndColorfulIcon("پرتال آموزشی", "", false, R.drawable.msg_bot, 0xFF1CA5ED, 0xFF1488E1, false); // Mashahir: instead of "Invite friends"
                         } else if (position == 1) {
                             textCell.setTextAndValueAndColorfulIcon(getString(R.string.RecentCalls), "", false, R.drawable.settings_calls, 0xFF55CA47, 0xFF27B434, false);
                         }
