@@ -111,7 +111,7 @@ import java.util.regex.Pattern;
 
 public class StickersAlert extends BottomSheet implements NotificationCenter.NotificationCenterDelegate {
 
-    public final static boolean DISABLE_STICKER_EDITOR = false;
+    public final static boolean DISABLE_STICKER_EDITOR = true; // Mashahir: no sticker making in the school messenger
     public final static int STICKERS_MAX_COUNT = 120;
 
     public interface StickersAlertDelegate {
