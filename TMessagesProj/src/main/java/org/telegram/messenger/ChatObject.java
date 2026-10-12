@@ -2246,6 +2246,9 @@ public class ChatObject {
     }
 
     public static boolean canAddUsers(TLRPC.Chat chat) {
+        if (!org.telegram.tgnet.RestBridge.isSchoolOffice(UserConfig.selectedAccount)) {
+            return false; // Mashahir: membership is the office's
+        }
         return !false && canUserDoAction(chat, ACTION_INVITE);
     }
 

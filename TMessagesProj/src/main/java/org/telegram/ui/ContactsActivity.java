@@ -919,7 +919,7 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
             }
         });
 
-        if (!createSecretChat && !returnAsResult) {
+        if (false && !createSecretChat && !returnAsResult) { // Mashahir: no phone numbers - the school's people are the contacts
             floatingButton = new FragmentFloatingButton(context, resourceProvider);
             contentView.addView(floatingButton, FragmentFloatingButton.createDefaultLayoutParams());
             floatingButton.setOnClickListener(v -> {

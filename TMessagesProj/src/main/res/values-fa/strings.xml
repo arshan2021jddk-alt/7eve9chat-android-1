@@ -7295,7 +7295,7 @@
     <string name="SetWallpapers">تغییر پس‌زمینه</string>
     <string name="Settings">تنظیمات</string>
     <string name="SettingsAccount">حساب کاربری</string>
-    <string name="SettingsAccountInfo">شماره، نام کاربری، بیوگرافی</string>
+    <string name="SettingsAccountInfo">نام، بیوگرافی، تصویر پروفایل</string>
     <string name="SettingsAccounts">حساب‌های کاربری</string>
     <string name="SettingsBrowseThemes">جستجوی پوسته‌ها</string>
     <string name="SettingsChat">تنظیمات گفتگو</string>
@@ -7317,7 +7317,7 @@
     <string name="SettingsPowerSaving">ذخیره انرژی</string>
     <string name="SettingsPowerSavingInfo">کاهش مصرف انرژی در شارژ کم</string>
     <string name="SettingsPrivacySecurity">حریم خصوصی و امنیت</string>
-    <string name="SettingsPrivacySecurityInfo">آخرین بازدید، دستگاه‌ها، کلیدهای عبور</string>
+    <string name="SettingsPrivacySecurityInfo">آخرین بازدید، دستگاه‌ها، کاربران مسدود</string>
     <string name="SettingsRecent">جستجوهای اخیر</string>
     <string name="SettingsSearchFaq">پرسش‌های متداول</string>
     <string name="SettingsSwitchToDayMode">تغییر به حالت روز</string>

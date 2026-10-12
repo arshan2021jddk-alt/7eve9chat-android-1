@@ -10570,11 +10570,11 @@
 
     <string name="SettingsAccount">Account</string>
     <string name="SettingsAccounts">Accounts</string>
-    <string name="SettingsAccountInfo">Number, Username, Bio</string>
+    <string name="SettingsAccountInfo">Name, Bio, Profile photo</string>
     <string name="SettingsChat">Chat Settings</string>
     <string name="SettingsChatInfo">Wallpaper, Night Mode, Animations</string>
     <string name="SettingsPrivacySecurity">Privacy &amp; Security</string>
-    <string name="SettingsPrivacySecurityInfo">Last Seen, Devices, Passkeys</string>
+    <string name="SettingsPrivacySecurityInfo">Last Seen, Devices, Blocked users</string>
     <string name="SettingsNotifications">Notifications</string>
     <string name="SettingsNotificationsInfo">Sounds, Calls, Badges</string>
     <string name="SettingsData">Data and Storage</string>

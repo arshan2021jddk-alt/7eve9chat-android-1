@@ -1279,7 +1279,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
                     } else if (position == botsDetailRow) {
                         privacyCell.setText(getString("PrivacyBotsInfo", R.string.PrivacyBotsInfo));
                     } else if (position == privacyShadowRow) {
-                        privacyCell.setText(getString(R.string.PrivacyInvitesInfo));
+                        privacyCell.setText(""); // Mashahir: nobody adds you to groups but the office
                     } else if (position == contactsDetailRow) {
                         /*if (newSync) {
                             privacyCell.setText(LocaleController.getString(R.string.SyncContactsInfoOn));

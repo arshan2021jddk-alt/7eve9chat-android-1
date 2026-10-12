@@ -1581,7 +1581,8 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
             if (n.startsWith("org.telegram.ui.Components.Premium.") && !n.endsWith(".LimitReachedBottomSheet")
                     || n.startsWith("org.telegram.ui.Stars.") || n.startsWith("org.telegram.ui.Gifts.")
                     || n.startsWith("org.telegram.ui.Business.") || n.equals("org.telegram.ui.PremiumPreviewFragment")
-                    || n.equals("org.telegram.ui.BoostsActivity") || n.startsWith("org.telegram.ui.Components.Premium.boosts.")) {
+                    || n.equals("org.telegram.ui.BoostsActivity") || n.startsWith("org.telegram.ui.Components.Premium.boosts.")
+                    || n.equals("org.telegram.ui.PeerColorActivity")) { // profile colours / icons are Premium
                 return true;
             }
         }

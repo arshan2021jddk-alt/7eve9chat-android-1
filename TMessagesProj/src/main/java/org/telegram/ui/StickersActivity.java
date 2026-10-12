@@ -355,8 +355,7 @@ public class StickersActivity extends BaseFragment implements NotificationCenter
         final int emojiCount    = mediaDataController.getStickerSets(TYPE_EMOJIPACKS).size();
 
         if (currentType == TYPE_IMAGE) {
-            featuredRow = items.size();
-            items.add(UItem.asButton(ID_FEATURED, R.drawable.msg2_trending, getString(R.string.FeaturedStickers), featuredCount > 0 ? formatNumber(featuredCount, ',') : ""));
+            // Mashahir: the school's own packs only - no "trending" stickers from elsewhere
             if (archivedCount > 0) {
                 archivedRow = items.size();
                 if (currentType == TYPE_IMAGE) {
@@ -384,7 +383,7 @@ public class StickersActivity extends BaseFragment implements NotificationCenter
         if (currentType == TYPE_IMAGE) {
             reactionsDoubleTapRow = items.size();
             items.add(UItem.asSettingsCell(ID_QUICK_REACTION, R.drawable.msg2_reactions2, getString(R.string.DoubleTapSetting)).onBind(this::setQuickReactionImage));
-            items.add(UItem.asShadow(addStickersBotSpan(getString(currentType == TYPE_EMOJIPACKS ? R.string.EmojiBotInfo : R.string.StickersBotInfo))));
+            items.add(UItem.asShadow(null)); // Mashahir: no @stickers bot here
 
             items.add(UItem.asHeader(getString(R.string.StickersSettings)));
             suggestRow = items.size();
@@ -431,7 +430,7 @@ public class StickersActivity extends BaseFragment implements NotificationCenter
             featured = new ArrayList<>(featured.subList(0, 3));
             truncatedFeaturedStickers = true;
         }
-        if (currentType == TYPE_EMOJIPACKS && !featured.isEmpty()) {
+        if (false && currentType == TYPE_EMOJIPACKS && !featured.isEmpty()) { // Mashahir: no featured packs
             if (sets.size() > 0) {
                 items.add(UItem.asShadow(null));
             }
@@ -451,7 +450,7 @@ public class StickersActivity extends BaseFragment implements NotificationCenter
         }
 
         if (currentType == TYPE_EMOJIPACKS) {
-            items.add(UItem.asShadow(addStickersBotSpan(getString(currentType == TYPE_EMOJIPACKS ? R.string.EmojiBotInfo : R.string.StickersBotInfo))));
+            items.add(UItem.asShadow(null));
         }
     }
 

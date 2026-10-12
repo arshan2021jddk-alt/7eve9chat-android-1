@@ -317,6 +317,13 @@ public class RestBridge {
         return selfMongoId;
     }
 
+    // Mashahir: is this account the school office (role "admin")? Only the office changes who
+    // is in a group (normally from the portal); teachers and students never add people.
+    public static boolean isSchoolOffice(int account) {
+        String me = getInstance(account).selfMongoId;
+        return me != null && "admin".equals(staffRoles.get(me));
+    }
+
     // Reverse lookup for SocketBridge: given a conversation's Mongo id (as
     // carried in realtime Socket.IO payloads), find the TL peer the UI
     // already knows this conversation as (populated by handleGetDialogs).

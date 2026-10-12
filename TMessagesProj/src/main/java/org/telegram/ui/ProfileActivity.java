@@ -2489,6 +2489,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 args.putLong("user_id", userId);
                 presentFragment(new QrActivity(args));
             });
+            actionBar.backButtonImageView.setVisibility(View.GONE); // Mashahir: no "my QR code" (no public usernames / links)
         } else {
             actionBar.setBackButtonDrawable(new BackDrawable(false));
             actionBar.getBackButton().setTranslationX(dp(2));
@@ -10987,7 +10988,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 }
             } else if (chatInfo != null) {
                 if (!isTopic && chatInfo.participants != null && chatInfo.participants.participants != null && !(chatInfo.participants instanceof TLRPC.TL_chatParticipantsForbidden)) {
-                    if (ChatObject.canAddUsers(currentChat) || currentChat.default_banned_rights == null || !currentChat.default_banned_rights.invite_users) {
+                    if (ChatObject.canAddUsers(currentChat)) { // Mashahir: members never add people (office only)
                         addMemberRow = rowCount++;
                     }
                     int count = chatInfo.participants.participants.size();
@@ -12106,6 +12107,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 }
                 editColorItem = otherItem.addSubItem(edit_color, R.drawable.menu_profile_colors, LocaleController.getString(R.string.ProfileColorEdit));
                 updateEditColorIcon();
+                editColorItem.setVisibility(View.GONE); // Mashahir: profile colours are a Premium feature
                 if (myProfile) {
                     setUsernameItem = otherItem.addSubItem(set_username, R.drawable.menu_username_change, getString(R.string.ProfileUsernameEdit));
                     linkItem = otherItem.addSubItem(copy_link_profile, R.drawable.msg_link2, getString(R.string.ProfileCopyLink));
@@ -16545,6 +16547,9 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         setUsernameItem.setIcon(hasUsername ? R.drawable.menu_username_change : R.drawable.menu_username_set);
         setUsernameItem.setText(hasUsername ? getString(R.string.ProfileUsernameEdit) : getString(R.string.ProfileUsernameSet));
         linkItem.setVisibility(UserObject.getPublicUsername(user) != null ? View.VISIBLE : View.GONE);
+        // Mashahir: usernames and profile links are the office's (portal) business
+        setUsernameItem.setVisibility(View.GONE);
+        linkItem.setVisibility(View.GONE);
     }
 
     private void updateEditColorIcon() {

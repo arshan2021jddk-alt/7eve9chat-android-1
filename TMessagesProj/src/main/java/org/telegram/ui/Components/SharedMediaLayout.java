@@ -3831,7 +3831,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     }
 
     protected boolean includeStories() {
-        return true;
+        return false; // Mashahir: no stories / profile posts
     }
 
     protected boolean includeSavedDialogs() {
