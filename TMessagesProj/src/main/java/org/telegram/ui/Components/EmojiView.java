@@ -284,6 +284,26 @@ public class EmojiView extends FrameLayout implements
     private boolean firstTabUpdate;
     private ChooseStickerActionTracker chooseStickerActionTracker;
 
+    // Mashahir: the GIF page is gone, so a pager position is not the page kind any more
+    // (0 = emoji, 1 = GIFs, 2 = stickers everywhere below); map between the two
+    private int pageType(int position) {
+        return position >= 0 && position < currentTabs.size() ? currentTabs.get(position).type : position;
+    }
+
+    private int pagePosition(int type) {
+        for (int i = 0; i < currentTabs.size(); i++) {
+            if (currentTabs.get(i).type == type) return i;
+        }
+        return 0;
+    }
+
+    private boolean hasPage(int type) {
+        for (int i = 0; i < currentTabs.size(); i++) {
+            if (currentTabs.get(i).type == type) return true;
+        }
+        return false;
+    }
+
     public void setAllow(boolean allowStickers, boolean allowGifs, boolean animated) {
         setAllow(true, allowStickers, allowGifs, animated);
     }
@@ -2621,7 +2641,7 @@ public class EmojiView extends FrameLayout implements
 
             @Override
             public void setCurrentItem(int item, boolean smoothScroll) {
-                startStopVisibleGifs(item == 1);
+                startStopVisibleGifs(pageType(item) == TAB_GIFS);
                 if (item == getCurrentItem()) {
                     if (item == 0) {
                         tabsMinusDy[Type.EMOJIS] = 0;
@@ -2633,7 +2653,7 @@ public class EmojiView extends FrameLayout implements
                         if (emojiTabs != null) {
                             emojiTabs.select(0);
                         }
-                    } else if (item == 1) {
+                    } else if (pageType(item) == TAB_GIFS) {
                         gifGridView.smoothScrollToPosition(0);
                     } else {
                         stickersGridView.smoothScrollToPosition(1);
@@ -2727,10 +2747,10 @@ public class EmojiView extends FrameLayout implements
                 @Override
                 public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {
                     checkGridVisibility(position, positionOffset);
-                    EmojiView.this.onPageScrolled(position, getMeasuredWidth() - getPaddingLeft() - getPaddingRight(), positionOffsetPixels);
+                    EmojiView.this.onPageScrolled(pageType(position), getMeasuredWidth() - getPaddingLeft() - getPaddingRight(), positionOffsetPixels);
                     showBottomTab(true, true);
                     SearchField currentField;
-                    int p = pager.getCurrentItem();
+                    int p = pageType(pager.getCurrentItem());
                     if (p == 0) {
                         currentField = emojiSearchField;
                     } else if (p == 1) {
@@ -2738,7 +2758,7 @@ public class EmojiView extends FrameLayout implements
                     } else {
                         currentField = stickersSearchField;
                     }
-                    String currentFieldText = currentField.searchEditText.getText().toString();
+                    String currentFieldText = currentField == null || currentField.searchEditText == null ? "" : currentField.searchEditText.getText().toString();
                     for (int a = 0; a < 3; a++) {
                         SearchField field;
                         if (a == 0) {
@@ -2754,13 +2774,14 @@ public class EmojiView extends FrameLayout implements
                         field.searchEditText.setText(currentFieldText);
                         field.searchEditText.setSelection(currentFieldText.length());
                     }
-                    startStopVisibleGifs((position == 0 && positionOffset > 0) || position == 1);
+                    startStopVisibleGifs(pageType(position) == TAB_GIFS || pageType(position) == TAB_EMOJI && positionOffset > 0 && pageType(position + 1) == TAB_GIFS);
                     updateStickerTabsPosition();
                 }
 
                 @Override
                 public void onPageSelected(int position) {
                     saveNewPage();
+                    position = pageType(position);
                     showBackspaceButton(position == 0, true);
                     showStickerSettingsButton(position == 2 && (shouldDrawBackground || shouldDrawStickerSettings), true);
                     if (delegate.isSearchOpened()) {
@@ -2796,7 +2817,7 @@ public class EmojiView extends FrameLayout implements
             bottomTabContainer.addView(searchButton, LayoutHelper.createFrame(48, 48, Gravity.BOTTOM | Gravity.LEFT, 2, 0, 2, 0));
             searchButton.setOnClickListener(v -> {
                 SearchField currentField;
-                int currentItem = pager.getCurrentItem();
+                int currentItem = pageType(pager.getCurrentItem());
                 if (currentItem == 0) {
                     currentField = emojiSearchField;
                 } else if (currentItem == 1) {
@@ -4889,7 +4910,7 @@ public class EmojiView extends FrameLayout implements
             searchAnimation = null;
         }
 
-        int currentItem = pager.getCurrentItem();
+        int currentItem = pageType(pager.getCurrentItem());
         if (currentItem == 2 && scrollToSet != -1) {
             TLRPC.TL_messages_stickerSet set = MediaDataController.getInstance(currentAccount).getStickerSetById(scrollToSet);
             if (set != null) {
@@ -5469,7 +5490,7 @@ public class EmojiView extends FrameLayout implements
             return;
         }
         int newPage;
-        int currentItem = pager.getCurrentItem();
+        int currentItem = pageType(pager.getCurrentItem());
         if (currentItem == 2) {
             newPage = 1;
         } else if (currentItem == 1) {
@@ -5519,7 +5540,7 @@ public class EmojiView extends FrameLayout implements
     public void switchToGifRecent() {
         showBackspaceButton(false, false);
         showStickerSettingsButton(false, false);
-        pager.setCurrentItem(1, false);
+        if (hasPage(TAB_GIFS)) pager.setCurrentItem(pagePosition(TAB_GIFS), false);
     }
 
     private void updateEmojiHeaders() {
@@ -6038,6 +6059,9 @@ public class EmojiView extends FrameLayout implements
     }
 
     public void onOpen(boolean forceEmoji, boolean groupEmojiHintWasVisible) {
+        if (currentPage == 2 && !hasPage(TAB_GIFS)) {
+            currentPage = 1; // the GIF page was last open (older build): stickers instead
+        }
         if (currentPage != 0 && stickersBanned) {
             currentPage = 0;
         }
@@ -6068,8 +6092,8 @@ public class EmojiView extends FrameLayout implements
         } else if (currentPage == 1) {
             showBackspaceButton(false, false);
             showStickerSettingsButton(shouldDrawBackground || shouldDrawStickerSettings, false);
-            if (pager.getCurrentItem() != 2) {
-                pager.setCurrentItem(2, false);
+            if (pager.getCurrentItem() != pagePosition(TAB_STICKERS)) {
+                pager.setCurrentItem(pagePosition(TAB_STICKERS), false);
             }
             if (stickersTab != null) {
                 firstTabUpdate = true;
@@ -6086,8 +6110,8 @@ public class EmojiView extends FrameLayout implements
         } else if (currentPage == 2) {
             showBackspaceButton(false, false);
             showStickerSettingsButton(false, false);
-            if (pager.getCurrentItem() != 1) {
-                pager.setCurrentItem(1, false);
+            if (pager.getCurrentItem() != pagePosition(TAB_GIFS)) {
+                pager.setCurrentItem(pagePosition(TAB_GIFS), false);
             }
             if (gifTabs != null) {
                 gifTabs.selectTab(0);
@@ -6244,7 +6268,7 @@ public class EmojiView extends FrameLayout implements
         } else {
             currentChatId = 0;
         }
-        View view = typeTabs.getTab(stickersBanned ? 2 : 0);
+        View view = typeTabs.getTab(stickersBanned ? pagePosition(TAB_STICKERS) : 0);
         if (view != null) {
             view.setAlpha(currentChatId != 0 ? 0.15f : 1.0f);
             if (stickersBanned) {
@@ -8520,8 +8544,8 @@ public class EmojiView extends FrameLayout implements
 
         @Override
         public boolean canScrollToTab(int position) {
-            if ((position == 1 || position == 2) && stickersBanned) {
-                showStickerBanHint(true, false, position == 1);
+            if (pageType(position) != TAB_EMOJI && stickersBanned) {
+                showStickerBanHint(true, false, pageType(position) == TAB_GIFS);
                 return false;
             }
             if (position == 0 && emojiBanned) {
@@ -8541,7 +8565,7 @@ public class EmojiView extends FrameLayout implements
         }
 
         public CharSequence getPageTitle(int position) {
-            switch (position) {
+            switch (pageType(position)) {
                 case 0:
                     return getString(R.string.Emoji);
                 case 1:
@@ -8554,7 +8578,7 @@ public class EmojiView extends FrameLayout implements
 
         @Override
         public int getTabPadding(int position) {
-            return AndroidUtilities.dp(position == 1 ? 12 : 18);
+            return AndroidUtilities.dp(pageType(position) == TAB_GIFS ? 12 : 18);
         }
 
         @Override

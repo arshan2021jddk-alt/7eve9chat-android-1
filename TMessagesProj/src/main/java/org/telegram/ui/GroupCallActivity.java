@@ -8671,7 +8671,7 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
                 conferenceAddPeopleRow = rowsCount++;
                 conferenceShareLinkRow = rowsCount++;
             } else if (!isRtmpStream() && ((!ChatObject.isChannel(currentChat) || currentChat != null && currentChat.megagroup) && ChatObject.canWriteToChat(currentChat) ||
-                    ChatObject.isChannel(currentChat) && currentChat != null && !currentChat.megagroup && ChatObject.isPublic(currentChat))) {
+                    ChatObject.isChannel(currentChat) && currentChat != null && !currentChat.megagroup && ChatObject.isPublic(currentChat)) && false) { // Mashahir: no inviting / links
                 addMemberRow = rowsCount++;
             }
 

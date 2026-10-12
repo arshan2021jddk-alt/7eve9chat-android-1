@@ -1911,6 +1911,22 @@ public class MessageObject {
         this(accountNum, message, replyToMessage, users, chats, sUsers, sChats, generateLayout, checkMediaExists, eid, isRepostPreview, isRepostVideoPreview, isSavedMessages, 0);
     }
 
+    // Mashahir: .tgs stickers cached by older builds have no thumbnail entry, which makes
+    // the app treat them as plain files ("file" in the chat list); give them the empty one
+    private static void fixCachedTgsSticker(TLRPC.Message message) {
+        if (message == null || message.media == null) return;
+        TLRPC.Document document = message.media.document;
+        if (document == null || !"application/x-tgsticker".equals(document.mime_type) || !document.thumbs.isEmpty()) return;
+        for (int a = 0; a < document.attributes.size(); a++) {
+            if (document.attributes.get(a) instanceof TLRPC.TL_documentAttributeSticker) {
+                TLRPC.TL_photoSizeEmpty thumb = new TLRPC.TL_photoSizeEmpty();
+                thumb.type = "s";
+                document.thumbs.add(thumb);
+                return;
+            }
+        }
+    }
+
     public MessageObject(int accountNum, TLRPC.Message message, MessageObject replyToMessage, AbstractMap<Long, TLRPC.User> users, AbstractMap<Long, TLRPC.Chat> chats, LongSparseArray<TLRPC.User> sUsers, LongSparseArray<TLRPC.Chat> sChats, boolean generateLayout, boolean checkMediaExists, long eid, boolean isRepostPreview, boolean isRepostVideoPreview, boolean isSavedMessages, int searchType) {
         Theme.createCommonMessageResources();
 
@@ -1923,6 +1939,7 @@ public class MessageObject {
         messageOwner = message;
         replyMessageObject = replyToMessage;
         eventId = eid;
+        fixCachedTgsSticker(message);
         wasUnread = !messageOwner.out && messageOwner.unread;
 
         if (message.replyMessage != null) {

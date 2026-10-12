@@ -4742,6 +4742,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         floatingButtonStories.setImageResource(R.drawable.outline_fab_story_24);
         floatingButtonStories.setOnClickListener(v -> openStoriesRecorder());
         contentView.addView(floatingButtonStories, FragmentFloatingButton.createSubButtonLayoutParams());
+        if (!getMessagesController().storiesEnabled()) {
+            floatingButtonStories.setVisibility(View.GONE); // Mashahir: no stories
+        }
 
         floatingButton3 = new FragmentFloatingButton(context, resourceProvider);
         contentView.addView(floatingButton3, FragmentFloatingButton.createDefaultLayoutParams());
@@ -8855,7 +8858,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             floatingButton3.setButtonVisible(isVisible, animated);
         }
         if (floatingButtonStories != null) {
-            floatingButtonStories.setButtonVisible(isVisible, animated);
+            floatingButtonStories.setButtonVisible(isVisible && getMessagesController().storiesEnabled(), animated);
         }
     }
 

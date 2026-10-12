@@ -12915,6 +12915,9 @@ public class ChatActivityEnterView extends FrameLayout implements
             nextIcon = ChatActivityEnterViewAnimatedIconView.State.SMILE;
         }
 
+        if (nextIcon == ChatActivityEnterViewAnimatedIconView.State.GIF) {
+            nextIcon = ChatActivityEnterViewAnimatedIconView.State.STICKER; // Mashahir: no GIFs
+        }
         emojiButton.setState(nextIcon, animated);
         onEmojiIconChanged(nextIcon);
     }

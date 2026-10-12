@@ -13339,6 +13339,13 @@ public class RestBridge {
         String ownerId = refId(conv, "owner");
         channel.creator = ownerId != null && ownerId.equals(selfMongoId);
         channel.admin_rights = adminRightsFor(conv, selfMongoId);
+        if (channel.admin_rights != null && !"admin".equals(staffRoles.get(String.valueOf(selfMongoId)))) {
+            // membership is the office's (portal): a teacher who admins a class doesn't add,
+            // remove or promote people from the app (the server refuses it anyway)
+            channel.admin_rights.invite_users = false;
+            channel.admin_rights.ban_users = false;
+            channel.admin_rights.add_admins = false;
+        }
         if (channel.admin_rights != null) {
             channel.flags |= TLObject.FLAG_14; // admin_rights present
         } else if (megagroup && selfMongoId != null) {
@@ -13352,6 +13359,7 @@ public class RestBridge {
 
         if (megagroup) {
             channel.default_banned_rights = defaultBannedRights(conv.optJSONObject("defaultPermissions"));
+            channel.default_banned_rights.invite_users = true; // members never add people (office only)
             channel.flags |= TLObject.FLAG_18;
         }
 

@@ -771,6 +771,15 @@ public class ProfileActionsView extends View {
                 break;
         }
 
+        // Mashahir: membership belongs to the school office and there are no stories, links
+        // or live streams: no Leave / Add story / Share / Stream / Stop bot buttons
+        for (int i = out.size() - 1; i >= 0; i--) {
+            int key = out.get(i).key;
+            if (key == KEY_LEAVE || key == KEY_STORY || key == KEY_SHARE || key == KEY_STREAM || key == KEY_STOP) {
+                out.remove(i);
+            }
+        }
+
         AndroidUtilities.runOnUIThread(() -> {
             int oldCount = activeCount;
             activeCount = out.size();
