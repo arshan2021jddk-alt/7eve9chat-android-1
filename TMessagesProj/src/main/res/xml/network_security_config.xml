@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mashahir: the school server may serve a certificate from the school's own CA (when Let's Encrypt
+     can't be renewed, e.g. on the national network) - trusted next to the system CAs. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/mashahir_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

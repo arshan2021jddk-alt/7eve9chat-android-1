@@ -154,7 +154,9 @@ android {
         externalNativeBuild {
             cmake {
                 version '3.22.1'
-                arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                // CI: the C/C++ objects come from ccache when the native code didn't change
+                def nativeCache = System.getenv("USE_CCACHE") == "1" ? ['-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'] : []
+                arguments(*(['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21'] + nativeCache)) //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
                 targets 'tmessages.49'
             }
         }

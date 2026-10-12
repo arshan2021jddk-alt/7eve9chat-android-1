@@ -66,10 +66,79 @@ import java.util.concurrent.Executors;
  */
 public class RestBridge {
 
-    // Mashahir (school build): the school server. For a real domain change SITE only.
-    public static final String SITE = "https://217.18.90.246:8443";
+    // Mashahir (school build): the school server. The address the app was built with; a moved
+    // server's address is kept in "mashahir_server" prefs (the old server announces it in
+    // /school/info "moveTo", or it is typed in on the sign-in screen - long press on the logo).
+    public static final String DEFAULT_SITE = "https://217.18.90.246:8443";
+    public static final String SITE = loadSite();
     public static final String SITE_HOST = SITE.replaceFirst("^https?://", "");
     public static final String BASE_URL = SITE + "/api";
+
+    private static android.content.SharedPreferences serverPrefs() {
+        return ApplicationLoader.applicationContext.getSharedPreferences("mashahir_server", android.content.Context.MODE_PRIVATE);
+    }
+
+    // "https://host[:port]" with no path, or null
+    public static String normalizeSite(String url) {
+        if (url == null) return null;
+        url = url.trim().replaceAll("/+$", "");
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
+        return url.matches("^https://[A-Za-z0-9.-]+(:\\d{1,5})?$") ? url : null;
+    }
+
+    private static String loadSite() {
+        try {
+            String s = normalizeSite(serverPrefs().getString("site", null));
+            if (s != null) return s;
+        } catch (Throwable ignore) {
+        }
+        return DEFAULT_SITE;
+    }
+
+    // used from the next start (sockets, links and file ids all hang on SITE); remembers the old
+    // address so media saved from it still loads from the new one
+    public static boolean saveSite(String url) {
+        String s = normalizeSite(url);
+        if (s == null) return false;
+        String old = serverPrefs().getString("oldSites", "");
+        if (!s.equals(SITE) && !(" " + old + " ").contains(" " + SITE + " ")) old = (old + " " + SITE).trim();
+        serverPrefs().edit().putString("site", s).putString("oldSites", old).commit();
+        return true;
+    }
+
+    // a media URL saved under an earlier server address -> the same file on the current server
+    static String currentSiteUrl(String url) {
+        if (url == null || url.startsWith(SITE)) return url;
+        try {
+            for (String old : serverPrefs().getString("oldSites", "").split(" ")) {
+                if (!old.isEmpty() && url.startsWith(old + "/")) return SITE + url.substring(old.length());
+            }
+            if (url.startsWith(DEFAULT_SITE + "/")) return SITE + url.substring(DEFAULT_SITE.length());
+        } catch (Throwable ignore) {
+        }
+        return url;
+    }
+
+    // Is this certificate (from a WebView SSL error) issued by the school's own CA
+    // (res/raw/mashahir_ca - the server's certificate when Let's Encrypt can't be renewed)?
+    public static boolean isSchoolCertificate(android.net.http.SslCertificate cert) {
+        try {
+            android.os.Bundle b = android.net.http.SslCertificate.saveState(cert);
+            byte[] der = b == null ? null : b.getByteArray("x509-certificate");
+            if (der == null) return false;
+            java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+            java.security.cert.X509Certificate leaf = (java.security.cert.X509Certificate) cf.generateCertificate(new java.io.ByteArrayInputStream(der));
+            java.security.cert.X509Certificate ca;
+            try (java.io.InputStream in = ApplicationLoader.applicationContext.getResources().openRawResource(org.telegram.messenger.R.raw.mashahir_ca)) {
+                ca = (java.security.cert.X509Certificate) cf.generateCertificate(in);
+            }
+            leaf.checkValidity();
+            leaf.verify(ca.getPublicKey());
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
 
     private static final RestBridge[] instances = new RestBridge[UserConfig.MAX_ACCOUNT_COUNT];
 
@@ -2388,10 +2457,44 @@ public class RestBridge {
 
     // Mashahir: the sign-in page is up - tell the server (so a broken connection shows in its log) and
     // send a crash from before sign-in, if there is one
+    // The school moved to another server: the old one answers /school/info with "moveTo".
+    // Take it only once the new server answers too; it is used from the next start.
+    private static volatile boolean moveChecked;
+    void checkServerMove(JSONObject info) {
+        String to = info == null ? null : normalizeSite(info.optString("moveTo", ""));
+        if (to == null || to.equals(SITE)) return;
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(to + "/api/school/info").openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(10000);
+            int code = c.getResponseCode();
+            c.disconnect();
+            if (code == 200 && saveSite(to)) {
+                org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(ApplicationLoader.applicationContext,
+                        "پیام‌رسان هنرستان به سرور جدید منتقل شد؛ برنامه را یک بار ببندید و دوباره باز کنید", android.widget.Toast.LENGTH_LONG).show());
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // once per start, signed in or not
+    public void checkServerMoveOnce() {
+        if (moveChecked) return;
+        moveChecked = true;
+        executor.execute(() -> {
+            try {
+                checkServerMove(request("GET", "/school/info", null, false));
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+    }
+
     public void schoolHello() {
         executor.execute(() -> {
             try {
-                request("GET", "/school/info?client=android-" + android.os.Build.VERSION.SDK_INT, null, false);
+                checkServerMove(request("GET", "/school/info?client=android-" + android.os.Build.VERSION.SDK_INT, null, false));
             } catch (Exception e) {
                 FileLog.e(e);
             }
@@ -12333,6 +12436,7 @@ public class RestBridge {
                     complete(onComplete, null, restError(404, "Unknown file reference"));
                     return;
                 }
+                url = currentSiteUrl(url); // saved before the school moved to another server
 
                 URL u = new URL(url);
                 HttpURLConnection conn = (HttpURLConnection) u.openConnection();

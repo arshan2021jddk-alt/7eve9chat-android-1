@@ -858,6 +858,35 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         android.widget.ImageView logo = new android.widget.ImageView(context);
         logo.setImageResource(R.drawable.school_logo);
         logo.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        // a long press on the emblem: the school server's address (after a move to another server)
+        logo.setOnLongClickListener(v -> {
+            EditTextBoldCursor addr = new EditTextBoldCursor(context);
+            addr.setText(org.telegram.tgnet.RestBridge.SITE);
+            addr.setTextDirection(View.TEXT_DIRECTION_LTR);
+            addr.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+            addr.setTextColor(Theme.getColor(Theme.key_dialogTextBlack));
+            FrameLayout box = new FrameLayout(context);
+            box.addView(addr, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP, 24, 0, 24, 0));
+            new AlertDialog.Builder(context)
+                .setTitle("آدرس سرور هنرستان")
+                .setMessage("فقط اگر دفتر هنرستان آدرس جدیدی داده است تغییر دهید.")
+                .setView(box)
+                .setPositiveButton("ذخیره", (d, w) -> {
+                    if (org.telegram.tgnet.RestBridge.saveSite(addr.getText().toString())) {
+                        android.widget.Toast.makeText(context, "ذخیره شد؛ برنامه دوباره باز می‌شود", android.widget.Toast.LENGTH_LONG).show();
+                        AndroidUtilities.runOnUIThread(() -> {
+                            android.content.Intent i = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+                            if (i != null) { i.addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK | android.content.Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(i); }
+                            android.os.Process.killProcess(android.os.Process.myPid());
+                        }, 1200);
+                    } else {
+                        android.widget.Toast.makeText(context, "آدرس نامعتبر است (مثل https://1.2.3.4:8443)", android.widget.Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+            return true;
+        });
         col.addView(logo, LayoutHelper.createLinear(112, 112, Gravity.CENTER_HORIZONTAL, 0, 0, 0, 20));
 
         TextView title = new TextView(context);

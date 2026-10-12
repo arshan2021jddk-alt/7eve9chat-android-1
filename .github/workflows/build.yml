@@ -47,6 +47,19 @@ jobs:
         run: |
           docker build -t telegram-build .
 
+      # the C/C++ part (most of the build time) rarely changes: compiler cache + Gradle downloads
+      - name: Restore build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            .gradle-home/caches
+            .gradle-home/wrapper
+          key: build-cache-${{ hashFiles('TMessagesProj/jni/**', 'TMessagesProj/build.gradle', 'build.gradle') }}-${{ github.run_id }}
+          restore-keys: |
+            build-cache-${{ hashFiles('TMessagesProj/jni/**', 'TMessagesProj/build.gradle', 'build.gradle') }}-
+            build-cache-
+
       - name: Build arm64 debug APK
         env:
           SEVEN_KEY_ALIAS: ${{ secrets.SEVEN_KEY_ALIAS }}
@@ -58,6 +71,9 @@ jobs:
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/home/source" \
             -e SEVEN_KEY_ALIAS -e SEVEN_STORE_PASSWORD -e SEVEN_KEY_PASSWORD \
+            -e USE_CCACHE=1 -e CCACHE_DIR=/home/source/.ccache -e CCACHE_BASEDIR=/home/gradle -e CCACHE_MAXSIZE=3G \
+            -e CCACHE_COMPILERCHECK=content -e CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,file_stat_matches \
+            -e GRADLE_USER_HOME=/home/source/.gradle-home \
             -e APP_VERSION_CODE_CI="$((7089 + GITHUB_RUN_NUMBER))" \
             telegram-build \
             bash -lc '
@@ -86,6 +102,7 @@ jobs:
                 exit 1
               fi
 
+              ccache -s || true
               mkdir -p /home/source/TMessagesProj/build/outputs/apk
 
               cp -R \

@@ -7045,6 +7045,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     protected void onResume() {
         super.onResume();
         isResumed = true;
+        org.telegram.tgnet.RestBridge.getInstance(currentAccount).checkServerMoveOnce(); // Mashahir: did the school move servers?
         pipActivityHandler.onResume();
         if (onResumeStaticCallback != null) {
             onResumeStaticCallback.run();

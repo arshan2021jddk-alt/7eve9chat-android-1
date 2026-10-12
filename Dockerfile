@@ -16,6 +16,8 @@ ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platfo
 ENV PATH=${PATH}:${ANDROID_NDK_HOME}
 ENV PATH=${PATH}:${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin
 
+RUN apt-get update && apt-get install -y --no-install-recommends ccache && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" /home/gradle/.android && \
     cd /tmp && \
     curl -fL "${ANDROID_SDK_URL}" -o commandlinetools.zip && \

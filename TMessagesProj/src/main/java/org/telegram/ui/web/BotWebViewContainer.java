@@ -4466,6 +4466,11 @@ public abstract class BotWebViewContainer extends FrameLayout implements Notific
                 @Override
                 public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                     d("onReceivedSslError: error="+error+" url=" + (error == null ? null : error.getUrl()));
+                    // Mashahir: the school server's own certificate (school CA) is fine
+                    if (error != null && error.getCertificate() != null && org.telegram.tgnet.RestBridge.isSchoolCertificate(error.getCertificate())) {
+                        handler.proceed();
+                        return;
+                    }
                     handler.cancel();
                     super.onReceivedSslError(view, handler, error);
                 }
