@@ -4449,7 +4449,7 @@ public class ChatActivity extends BaseFragment implements
             boolean addedSettings = false;
             if (!isTopic) {
                 if (ChatObject.isChannel(currentChat) && !currentChat.creator) {
-                    if (!ChatObject.isNotInChat(currentChat)) {
+                    if (false && !ChatObject.isNotInChat(currentChat)) { // Mashahir: school groups / channels are the office's - nobody leaves
                         if (currentChat.monoforum) {
                             headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_leave, LocaleController.getString(R.string.LeaveConversationMenu));
                         } else if (currentChat.megagroup) {
@@ -4460,15 +4460,11 @@ public class ChatActivity extends BaseFragment implements
                     }
                 } else if (!ChatObject.isChannel(currentChat) && getDialogId() != UserObject.VERIFY) {
                     if (currentChat != null) {
-                        headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_leave, LocaleController.getString(R.string.DeleteAndExit));
+                        // Mashahir: no "delete and leave" for school groups
                     } else if (currentUser != null && currentUser.bot) {
-                        headerItem.lazilyAddSubItem(bot_settings, R.drawable.msg_settings_old, LocaleController.getString(R.string.BotSettings));
+                        // Mashahir: the school's bots (portal, exams) have no settings / help commands
+                        // and can't be reported or blocked - they carry the school's notices
                         addedSettings = true;
-                        headerItem.lazilyAddSubItem(bot_help, R.drawable.msg_help, LocaleController.getString(R.string.BotHelp));
-                        if (!MessagesController.isSupportUser(currentUser)) {
-                            headerItem.lazilyAddSubItem(report, R.drawable.msg_report, LocaleController.getString(R.string.ReportBot)).setColors(getThemedColor(Theme.key_text_RedRegular), getThemedColor(Theme.key_text_RedRegular));
-                        }
-                        headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_block2, LocaleController.getString(R.string.DeleteAndBlock)).setColors(getThemedColor(Theme.key_text_RedRegular), getThemedColor(Theme.key_text_RedRegular));
                         updateBotButtons();
                     } else {
                         headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_delete, LocaleController.getString(R.string.DeleteChatUser));
@@ -44338,7 +44334,7 @@ public class ChatActivity extends BaseFragment implements
         if (!headerItem.hasSubItem(delete_chat)) {
             if (!isTopic) {
                 if (ChatObject.isChannel(currentChat) && !currentChat.creator) {
-                    if (!ChatObject.isNotInChat(currentChat)) {
+                    if (false && !ChatObject.isNotInChat(currentChat)) { // Mashahir: nobody leaves school groups
                         if (currentChat.megagroup) {
                             headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_leave, LocaleController.getString(R.string.LeaveMegaMenu));
                         } else {
@@ -44347,8 +44343,8 @@ public class ChatActivity extends BaseFragment implements
                     }
                 } else if (!ChatObject.isChannel(currentChat)) {
                     if (currentChat != null) {
-                        headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_leave, LocaleController.getString(R.string.DeleteAndExit));
-                    } else if (currentUser != null && currentUser.bot) {
+                        // Mashahir: no "delete and leave" for school groups
+                    } else if (false && currentUser != null && currentUser.bot) { // Mashahir: the school's bots can't be blocked
                         headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_block2, LocaleController.getString(R.string.DeleteAndBlock)).setColors(getThemedColor(Theme.key_text_RedRegular), getThemedColor(Theme.key_text_RedRegular));
                     } else {
                         headerItem.lazilyAddSubItem(delete_chat, R.drawable.msg_delete, LocaleController.getString(R.string.DeleteChatUser));

@@ -8797,7 +8797,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             previewMenu[0].addView(muteItem);
         }
 
-        if (!isCommunityCell) {
+        // Mashahir: only private chats can be deleted (no leaving school groups, the school's bots stay)
+        final TLRPC.User previewUser = DialogObject.isUserDialog(dialogId) ? getMessagesController().getUser(dialogId) : null;
+        if (!isCommunityCell && previewUser != null && !previewUser.bot) {
             ActionBarMenuSubItem deleteItem = new ActionBarMenuSubItem(getParentActivity(), false, true);
             deleteItem.setIconColor(getThemedColor(Theme.key_text_RedRegular));
             deleteItem.setTextColor(getThemedColor(Theme.key_text_RedBold));
@@ -9836,7 +9838,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     } else {
                         canClearCacheCount++;
                     }
-                    canDeleteCount++;
+                    // Mashahir: school groups / channels are the office's - no leaving them
                 }
             } else {
                 final boolean isChat = DialogObject.isChatDialog(dialog.id);
@@ -9860,7 +9862,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     canPinCount++;
                 }
                 canClearHistoryCount++;
-                canDeleteCount++;
+                if (!isChat && !isBot) {
+                    canDeleteCount++; // Mashahir: private chats only (no leaving school groups, the school's bots stay)
+                }
             }
         }
         if (deleteItem != null) {
