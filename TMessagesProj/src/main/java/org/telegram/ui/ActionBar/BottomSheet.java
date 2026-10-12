@@ -1574,8 +1574,23 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
         }
     }
 
+    // Mashahir: a school messenger has no Premium, Stars, gifts or boosts - their sheets never open
+    public static boolean isPaidFeature(Class<?> c) {
+        for (; c != null && c != Object.class; c = c.getSuperclass()) {
+            String n = c.getName();
+            if (n.startsWith("org.telegram.ui.Components.Premium.") && !n.endsWith(".LimitReachedBottomSheet")
+                    || n.startsWith("org.telegram.ui.Stars.") || n.startsWith("org.telegram.ui.Gifts.")
+                    || n.startsWith("org.telegram.ui.Business.") || n.equals("org.telegram.ui.PremiumPreviewFragment")
+                    || n.equals("org.telegram.ui.BoostsActivity") || n.startsWith("org.telegram.ui.Components.Premium.boosts.")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public void show() {
+        if (isPaidFeature(getClass())) return;
         if (!AndroidUtilities.isSafeToShow(getContext())) return;
         if (attachedFragment != null) {
             onCreateInternal();

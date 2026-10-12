@@ -976,8 +976,8 @@ public abstract class BaseFragment {
     }
 
     public INavigationLayout[] showAsSheet(BaseFragment fragment, BottomSheetParams params) {
-        if (getParentActivity() == null) {
-            return null;
+        if (getParentActivity() == null || fragment != null && BottomSheet.isPaidFeature(fragment.getClass())) {
+            return null; // Mashahir: no Premium / Stars / gifts / boosts screens
         }
         BottomSheet[] bottomSheet = new BottomSheet[1];
         INavigationLayout[] actionBarLayout = new INavigationLayout[]{INavigationLayout.newLayout(getParentActivity(), false, () -> bottomSheet[0])};
