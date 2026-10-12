@@ -355,16 +355,8 @@ public class UserInfoActivity extends UniversalFragment implements NotificationC
 
         final TLRPC.User user = getUserConfig().getCurrentUser();
         items.add(UItem.asHeader(getString(R.string.EditAccountInfoHeader)));
-        if (user != null) {
-            numberRow = items.size();
-            items.add(SettingsActivity.SettingCell.Factory.of(INFO_PHONE, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_calls, PhoneFormat.getInstance().format("+" + user.phone), getString(R.string.TapToChangePhone)));
-        }
-        usernameRow = items.size();
-        if (UserObject.getPublicUsername(user) != null) {
-            items.add(SettingsActivity.SettingCell.Factory.of(INFO_USERNAME, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.filled_chatlist_mention, "@" + UserObject.getPublicUsername(user), getString(R.string.Username)));
-        } else {
-            items.add(SettingsActivity.SettingCell.Factory.of(INFO_USERNAME, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.filled_chatlist_mention, getString(R.string.AddUsername), null));
-        }
+        // Mashahir: no phone number and no public username for school accounts
+        usernameRow = -1;
         birthdayRow = items.size();
         if (birthday != null) {
             items.add(SettingsActivity.SettingCell.Factory.of(INFO_BIRTHDAY, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.filled_birthday, birthdayString(birthday), getString(R.string.ContactBirthday)));

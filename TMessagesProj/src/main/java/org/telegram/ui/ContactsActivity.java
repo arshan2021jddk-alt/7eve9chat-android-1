@@ -692,27 +692,12 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
                             presentFragment(new GroupInviteActivity(chatId != 0 ? chatId : channelId));
                         }
                     } else {
+                        // Mashahir: groups and channels are made by the office - the school portal and
+                        // recent calls instead
                         if (row == 0) {
-                            if (MessagesController.getInstance(currentAccount).isFrozen()) {
-                                AccountFrozenAlert.show(currentAccount);
-                                return;
-                            }
-                            Bundle args = new Bundle();
-                            presentFragment(new GroupCreateActivity(args), false);
+                            getMessagesController().openByUserName("portal", this, 0);
                         } else if (row == 1) {
-                            if (MessagesController.getInstance(currentAccount).isFrozen()) {
-                                AccountFrozenAlert.show(currentAccount);
-                                return;
-                            }
-                            SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-                            if (!BuildVars.DEBUG_VERSION && preferences.getBoolean("channel_intro", false)) {
-                                Bundle args = new Bundle();
-                                args.putInt("step", 0);
-                                presentFragment(new ChannelCreateActivity(args));
-                            } else {
-                                presentFragment(new ActionIntroActivity(ActionIntroActivity.ACTION_TYPE_CHANNEL_CREATE));
-                                preferences.edit().putBoolean("channel_intro", true).commit();
-                            }
+                            presentFragment(new CallLogActivity());
                         }
                     }
                 } else {

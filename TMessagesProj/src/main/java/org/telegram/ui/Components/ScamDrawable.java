@@ -33,30 +33,34 @@ public class ScamDrawable extends Drawable {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(AndroidUtilities.dp(1));
 
-        if (type == 0) {
-            text = LocaleController.getString(R.string.ScamMessage);
-        } else {
-            text = LocaleController.getString(R.string.FakeMessage);
-        }
+        text = label(type);
         textWidth = (int) Math.ceil(textPaint.measureText(text));
+        setColor(0xFF000000);
     }
 
     public void checkText() {
         String newText;
-        if (currentType == 0) {
-            newText = LocaleController.getString(R.string.ScamMessage);
-        } else {
-            newText = LocaleController.getString(R.string.FakeMessage);
-        }
+        newText = label(currentType);
         if (!newText.equals(text)) {
             text = newText;
             textWidth = (int) Math.ceil(textPaint.measureText(text));
         }
     }
 
+    // Mashahir: the "scam" / "fake" marks are the school's role badges - set by the server for the
+    // office and the teachers, so nobody can pass for them by picking a name
+    private static String label(int type) {
+        return type == 0 ? "مدیر" : "دبیر";
+    }
+
+    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+
     public void setColor(int color) {
-        textPaint.setColor(color);
-        paint.setColor(color);
+        int c = currentType == 0 ? 0xFFD08A00 : 0xFF2E9E5B;
+        c = (c & 0x00FFFFFF) | (Color.alpha(color) << 24);
+        textPaint.setColor(c);
+        paint.setColor(c);
+        fill.setColor((c & 0x00FFFFFF) | ((Color.alpha(color) * 30 / 255) << 24));
         colorAlpha = Color.alpha(color);
     }
 
@@ -66,6 +70,7 @@ public class ScamDrawable extends Drawable {
             int localAlpha = (int) (colorAlpha * (alpha / 255f));
             paint.setAlpha(localAlpha);
             textPaint.setAlpha(localAlpha);
+            fill.setAlpha(localAlpha * 30 / 255);
         }
     }
 
@@ -82,7 +87,8 @@ public class ScamDrawable extends Drawable {
     @Override
     public void draw(Canvas canvas) {
         rect.set(getBounds());
-        canvas.drawRoundRect(rect, AndroidUtilities.dp(2), AndroidUtilities.dp(2), paint);
+        canvas.drawRoundRect(rect, AndroidUtilities.dp(4), AndroidUtilities.dp(4), fill);
+        canvas.drawRoundRect(rect, AndroidUtilities.dp(4), AndroidUtilities.dp(4), paint);
         canvas.drawText(text, rect.left + AndroidUtilities.dp(5), rect.top + AndroidUtilities.dp(12), textPaint);
     }
 

@@ -767,7 +767,7 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         sessionsDetailRow = rowCount++;
 
         privacySectionRow = rowCount++;
-        phoneNumberRow = rowCount++;
+        phoneNumberRow = -1; // Mashahir: school accounts have no phone number
         lastSeenRow = rowCount++;
         profilePhotoRow = rowCount++;
         forwardsRow = rowCount++;
@@ -781,10 +781,10 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
             noncontactsRow = -1;
         }
         birthdayRow = rowCount++;
-        giftsRow = rowCount++;
+        giftsRow = -1; // Mashahir: no gifts, profile music, and the office adds people to groups
         bioRow = rowCount++;
-        musicRow = rowCount++;
-        groupsRow = rowCount++;
+        musicRow = -1;
+        groupsRow = -1;
         privacyShadowRow = rowCount++;
 
         if (getMessagesController().autoarchiveAvailable || getUserConfig().isPremium()) {
@@ -796,16 +796,17 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
             newChatsRow = -1;
             newChatsSectionRow = -1;
         }
-        advancedSectionRow = rowCount++;
-        deleteAccountRow = rowCount++;
-        deleteAccountDetailRow = rowCount++;
-        botsSectionRow = rowCount++;
+        // Mashahir: only the office deletes accounts; no payments, phone contacts or secret chats
+        advancedSectionRow = -1;
+        deleteAccountRow = -1;
+        deleteAccountDetailRow = -1;
+        botsSectionRow = -1;
         if (getUserConfig().hasSecureData) {
             passportRow = rowCount++;
         } else {
             passportRow = -1;
         }
-        paymentsClearRow = rowCount++;
+        paymentsClearRow = -1;
         if (!biometryBots.isEmpty()) {
             botsBiometryRow = rowCount++;
         } else {
@@ -818,17 +819,17 @@ public class PrivacySettingsActivity extends BaseFragment implements Notificatio
         } else {
             webSessionsRow = -1;
             botsDetailRow = -1;
-            botsAndWebsitesShadowRow = rowCount++;
+            botsAndWebsitesShadowRow = -1;
         }
-        contactsSectionRow = rowCount++;
-        contactsDeleteRow = rowCount++;
-        contactsSyncRow = rowCount++;
-        contactsSuggestRow = rowCount++;
-        contactsDetailRow = rowCount++;
-        secretSectionRow = rowCount++;
-        secretMapRow = rowCount++;
-        secretWebpageRow = rowCount++;
-        secretDetailRow = rowCount++;
+        contactsSectionRow = -1;
+        contactsDeleteRow = -1;
+        contactsSyncRow = -1;
+        contactsSuggestRow = -1;
+        contactsDetailRow = -1;
+        secretSectionRow = -1;
+        secretMapRow = -1;
+        secretWebpageRow = -1;
+        secretDetailRow = -1;
         if (listAdapter != null && notify) {
             listAdapter.notifyDataSetChanged();
         }

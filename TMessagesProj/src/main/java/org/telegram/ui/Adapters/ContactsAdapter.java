@@ -573,10 +573,10 @@ public class ContactsAdapter extends RecyclerListView.SectionsAdapter {
                             textCell.setTextAndIcon(getString(R.string.InviteToGroupByLink), R.drawable.msg_link2, false);
                         }
                     } else {
-                        if (position == 0) {
-                            textCell.setTextAndValueAndColorfulIcon(getString(R.string.NewGroup), "", false, R.drawable.settings_group, 0xFF1CA5ED, 0xFF1488E1, false);
+                        if (position == 0) { // Mashahir: instead of "New group" / "New channel"
+                            textCell.setTextAndValueAndColorfulIcon("پرتال آموزشی", "", false, R.drawable.msg_bot, 0xFF1CA5ED, 0xFF1488E1, false);
                         } else if (position == 1) {
-                            textCell.setTextAndValueAndColorfulIcon(getString(R.string.NewChannel), "", false, R.drawable.settings_channel, 0xFF55CA47, 0xFF27B434, false);
+                            textCell.setTextAndValueAndColorfulIcon(getString(R.string.RecentCalls), "", false, R.drawable.settings_calls, 0xFF55CA47, 0xFF27B434, false);
                         }
                     }
                 } else {

@@ -2488,7 +2488,57 @@ public class RestBridge {
             } catch (Exception e) {
                 FileLog.e(e);
             }
+            loadStaffRoles();
         });
+    }
+
+    // Who is the office / a teacher (their names carry a role badge). Kept between starts.
+    static final java.util.concurrent.ConcurrentHashMap<String, String> staffRoles = new java.util.concurrent.ConcurrentHashMap<>();
+    static {
+        try {
+            JSONObject saved = new JSONObject(serverPrefs().getString("staffRoles", "{}"));
+            for (java.util.Iterator<String> it = saved.keys(); it.hasNext(); ) {
+                String k = it.next();
+                staffRoles.put(k, saved.optString(k));
+            }
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private void loadStaffRoles() {
+        if (authToken == null) return;
+        try {
+            JSONArray list = requestArray("GET", "/school/staff", null, true);
+            if (list == null) return;
+            JSONObject saved = new JSONObject();
+            java.util.HashMap<String, String> fresh = new java.util.HashMap<>();
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject o = list.optJSONObject(i);
+                if (o == null) continue;
+                fresh.put(o.optString("id"), o.optString("role"));
+                saved.put(o.optString("id"), o.optString("role"));
+            }
+            boolean changed = !fresh.equals(new java.util.HashMap<>(staffRoles));
+            staffRoles.clear();
+            staffRoles.putAll(fresh);
+            serverPrefs().edit().putString("staffRoles", saved.toString()).apply();
+            if (changed) {
+                // badges on already loaded users
+                org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+                    org.telegram.messenger.MessagesController mc = org.telegram.messenger.MessagesController.getInstance(currentAccount);
+                    for (java.util.Map.Entry<Long, String> e : new java.util.HashMap<>(userMongoIdByTlId).entrySet()) {
+                        TLRPC.User tu = mc.getUser(e.getKey());
+                        if (tu == null) continue;
+                        String r = staffRoles.get(e.getValue());
+                        tu.scam = "admin".equals(r);
+                        tu.fake = "teacher".equals(r);
+                    }
+                    org.telegram.messenger.NotificationCenter.getInstance(currentAccount).postNotificationName(org.telegram.messenger.NotificationCenter.updateInterfaces, org.telegram.messenger.MessagesController.UPDATE_MASK_NAME);
+                });
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     public void schoolHello() {
@@ -13474,8 +13524,10 @@ public class RestBridge {
         // Only real contacts: otherwise Telegram hides "Add to contacts"
         user.contact = self || contactMongoIds.contains(mongoId);
         user.verified = u.optBoolean("isVerified", false);
-        user.scam = u.optBoolean("isScam", false);
-        user.fake = u.optBoolean("isFake", false);
+        // Mashahir: role badges - "scam" draws «مدیر», "fake" draws «دبیر» (see ScamDrawable)
+        String staffRole = staffRoles.get(mongoId);
+        user.scam = "admin".equals(staffRole);
+        user.fake = "teacher".equals(staffRole);
         if (u.has("isPremium")) {
             user.premium = u.optBoolean("isPremium", false);
         } else {

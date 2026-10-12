@@ -9352,7 +9352,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             }
         } else if (id == NotificationCenter.userIsPremiumBlockedUpadted) {
             if (otherItem != null) {
-                otherItem.setSubItemShown(start_secret_chat, DialogObject.isEmpty(getMessagesController().isUserContactBlocked(userId)));
+                otherItem.setSubItemShown(start_secret_chat, false); // Mashahir: no secret chats on this server
             }
             updateEditColorIcon();
         } else if (id == NotificationCenter.currentUserPremiumStatusChanged) {
@@ -10390,7 +10390,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             birthdayFetcher.subscribe(this::createBirthdayEffect);
         }
         if (otherItem != null) {
-            otherItem.setSubItemShown(start_secret_chat, DialogObject.isEmpty(getMessagesController().isUserContactBlocked(userId)));
+            otherItem.setSubItemShown(start_secret_chat, false); // Mashahir: no secret chats on this server
             if (hasPrivacyCommand()) {
                 otherItem.showSubItem(bot_privacy);
             } else {
@@ -12177,7 +12177,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                         giftAction = true;
                     }
                     otherItem.addSubItem(start_secret_chat, R.drawable.msg_secret, LocaleController.getString(R.string.StartEncryptedChat));
-                    otherItem.setSubItemShown(start_secret_chat, DialogObject.isEmpty(getMessagesController().isUserContactBlocked(userId)));
+                    otherItem.setSubItemShown(start_secret_chat, false); // Mashahir: no secret chats on this server
 
                     if (userInfo != null) {
                         otherItem.addSubItem(enable_no_forwards, R.drawable.menu_share_off_24, getString(R.string.DisableSharing));
