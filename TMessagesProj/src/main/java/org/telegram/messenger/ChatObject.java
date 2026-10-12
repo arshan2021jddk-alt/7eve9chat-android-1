@@ -1343,7 +1343,7 @@ public class ChatObject {
             long selfId = getSelfId();
             VoIPService service = VoIPService.getSharedInstance();
             TLRPC.GroupCallParticipant selfParticipant = participants.get(selfId);
-            canStreamVideo = true;//selfParticipant != null && selfParticipant.video_joined || BuildVars.DEBUG_PRIVATE_VERSION;
+            canStreamVideo = call == null || call.can_start_video; // Mashahir: in a class only the teachers / office show a camera or a screen
             boolean allowedVideoCount;
             boolean hasAnyVideo = false;
             activeVideos = 0;
