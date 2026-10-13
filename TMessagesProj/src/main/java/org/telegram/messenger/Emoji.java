@@ -918,6 +918,7 @@ public class Emoji {
     }
 
     public static void addRecentEmoji(String code) {
+        if (EmojiData.isBlocked(code)) return; // Mashahir
         Integer count = emojiUseHistory.get(code);
         if (count == null) {
             count = 0;
@@ -1028,6 +1029,10 @@ public class Emoji {
                         emojiUseHistory.put(args2[0], Utilities.parseInt(args2[1]));
                     }
                 }
+            }
+            // Mashahir: emoji the school messenger doesn't offer leave the recent list too
+            for (java.util.Iterator<String> it = emojiUseHistory.keySet().iterator(); it.hasNext(); ) {
+                if (EmojiData.isBlocked(it.next())) it.remove();
             }
             if (emojiUseHistory.isEmpty()) {
                 if (!preferences.getBoolean("filled_default", false)) {

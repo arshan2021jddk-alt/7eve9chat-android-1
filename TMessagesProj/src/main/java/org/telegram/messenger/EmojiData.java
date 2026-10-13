@@ -8,6 +8,7 @@
 
 package org.telegram.messenger;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -553,6 +554,36 @@ public class EmojiData {
             if (dataColored[a] == null) {
                 dataColored[a] = data[a];
             }
+            // Mashahir: not offered in the emoji panel (a new array: "data" keeps the sprite order)
+            ArrayList<String> kept = new ArrayList<>(dataColored[a].length);
+            for (String e : dataColored[a]) {
+                if (!isBlocked(e)) kept.add(e);
+            }
+            if (kept.size() != dataColored[a].length) {
+                dataColored[a] = kept.toArray(new String[0]);
+            }
         }
+    }
+
+    // Mashahir: emoji a school messenger in Iran doesn't offer - the middle finger, and the
+    // pride / transgender flags and same-sex couple / family emoji (any skin tone, with or
+    // without U+FE0F). The server strips the same ones from texts too.
+    private static final String MAN = "\uD83D\uDC68", WOMAN = "\uD83D\uDC69", ZWJ = "\u200D", HEART = "\u2764", KISS = "\uD83D\uDC8B";
+
+    public static boolean isBlocked(String emoji) {
+        if (emoji == null || emoji.isEmpty()) return false;
+        String n = emoji.replace("\uFE0F", "").replaceAll("[\\x{1F3FB}-\\x{1F3FF}]", "");
+        if (n.equals("\uD83D\uDD95") // middle finger
+                || n.equals("\uD83C\uDFF3" + ZWJ + "\uD83C\uDF08") // rainbow flag
+                || n.equals("\uD83C\uDFF3" + ZWJ + "\u26A7") // transgender flag
+                || n.equals("\u26A7")) { // transgender symbol
+            return true;
+        }
+        for (String p : new String[]{MAN, WOMAN}) {
+            if (n.equals(p + ZWJ + HEART + ZWJ + p) || n.equals(p + ZWJ + HEART + ZWJ + KISS + ZWJ + p) || n.startsWith(p + ZWJ + p + ZWJ)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -8949,10 +8949,20 @@ public class MediaDataController extends BaseController {
         getEmojiSuggestions(langCodes, keyword, fullMatch, callback, sync, allowAnimated, allowTopicIcons, includeSingleEmoji, false, maxAnimatedPerEmoji, false);
     }
 
-    public void getEmojiSuggestions(String[] langCodes, String keyword, boolean fullMatch, KeywordResultCallback callback, final CountDownLatch sync, boolean allowAnimated, boolean allowTopicIcons, boolean includeSingleEmoji, boolean forcePremium, Integer maxAnimatedPerEmoji, boolean includeOnlyTextColor) {
-        if (callback == null) {
+    public void getEmojiSuggestions(String[] langCodes, String keyword, boolean fullMatch, KeywordResultCallback callback0, final CountDownLatch sync, boolean allowAnimated, boolean allowTopicIcons, boolean includeSingleEmoji, boolean forcePremium, Integer maxAnimatedPerEmoji, boolean includeOnlyTextColor) {
+        if (callback0 == null) {
             return;
         }
+        // Mashahir: no suggestions of emoji the school messenger doesn't offer
+        final KeywordResultCallback callback = (param, alias) -> {
+            if (param != null) {
+                for (int i = param.size() - 1; i >= 0; i--) {
+                    KeywordResult r = param.get(i);
+                    if (r != null && EmojiData.isBlocked(r.emoji)) param.remove(i);
+                }
+            }
+            callback0.run(param, alias);
+        };
         if (TextUtils.isEmpty(keyword) || langCodes == null) {
             callback.run(new ArrayList<>(), null);
             return;
