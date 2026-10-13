@@ -11826,6 +11826,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
     // 7eve9Chat: "Add story" on a profile posts *as that profile* (a channel or
     // group this account runs) - it used to open the recorder as yourself.
     private boolean canAddStoryHere() {
+        if (true) return false; // Mashahir: no stories / posts
         if (isBot()) return true;
         return dialog_id < 0 && profileActivity.getMessagesController().getStoriesController().canPostStories(dialog_id);
     }

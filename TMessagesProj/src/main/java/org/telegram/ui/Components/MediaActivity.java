@@ -112,6 +112,9 @@ public class MediaActivity extends BaseFragment implements SharedMediaLayout.Sha
     @Override
     public boolean onFragmentCreate() {
         type = getArguments().getInt("type", TYPE_MEDIA);
+        if (type == TYPE_STORIES || type == TYPE_ARCHIVED_CHANNEL_STORIES || type == TYPE_STORIES_SEARCH) {
+            return false; // Mashahir: no stories / posts pages
+        }
         dialogId = getArguments().getLong("dialog_id");
         topicId = getArguments().getLong("topic_id", 0);
         hashtag = getArguments().getString("hashtag", "");
