@@ -385,32 +385,9 @@ public class UserInfoActivity extends UniversalFragment implements NotificationC
         }
         items.add(UItem.asShadow(birthdayInfo));
 
-        channelRow = items.size();
-        if (channel == null) {
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_CHANNEL, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.msg_filled_menu_channels, getString(R.string.EditProfileChannelTitle), null, getString(R.string.EditProfileChannelAdd)));
-        } else {
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_CHANNEL, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.msg_filled_menu_channels, getString(R.string.EditProfileChannelTitle), channel.title));
-        }
-        if (hadHours) {
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_HOURS, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.filled_premium_hours, getString(R.string.EditProfileHours)));
-        }
-        if (hadLocation) {
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_LOCATION, IconBackgroundColors.RED.top, IconBackgroundColors.RED.bottom, R.drawable.filled_location, getString(R.string.EditProfileLocation)));
-        }
-        if (bots != null && !bots.isEmpty()) {
-            final StringBuilder value = new StringBuilder();
-            for (final TL_account.TL_connectedBot bot : bots) {
-                final TLRPC.User botUser = MessagesController.getInstance(currentAccount).getUser(bot.bot_id);
-                if (botUser != null) {
-                    if (value.length() > 0) value.append(", ");
-                    value.append(UserObject.getUserName(botUser));
-                }
-            }
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_AI, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.premium_ai_editor, getString(R.string.EditProfileChatAutomation), value));
-        } else {
-            items.add(SettingsActivity.SettingCell.Factory.of(BUTTON_AI, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.premium_ai_editor, applyNewSpan(getString(R.string.EditProfileChatAutomation))));
-        }
-        items.add(UItem.asShadow(-3, getString(R.string.EditProfileChatAutomationInfo)));
+        // Mashahir: no personal channel, business hours / location or chat automation (bots)
+        // for a school account - name, bio and birthday only
+        channelRow = -1;
         final boolean hasAddAccount = UserConfig.getActivatedAccountsCount() < UserConfig.MAX_ACCOUNT_COUNT;
         if (hasAddAccount) {
             addAccountRow = items.size();

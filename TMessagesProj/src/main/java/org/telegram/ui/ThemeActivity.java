@@ -682,7 +682,7 @@ public class ThemeActivity extends BaseFragment implements NotificationCenter.No
             swipeGestureInfoRow = rowCount++;
 
             nightThemeRow = rowCount++;
-            browserRow = rowCount++;
+            // Mashahir: no in-app browser settings
             liteModeRow = rowCount++;
             stickersRow = rowCount++;
             stickersSectionRow = rowCount++;
@@ -698,15 +698,8 @@ public class ThemeActivity extends BaseFragment implements NotificationCenter.No
             bluetoothScoRow = rowCount++;
             mediaSoundSectionRow = rowCount++;
 
-            otherHeaderRow = rowCount++;
-            directShareRow = rowCount++;
-            TL_account.contentSettings contentSettings = getMessagesController().getContentSettings();
-            if (contentSettings != null && contentSettings.sensitive_can_change) {
-                sensitiveContentRow = rowCount++;
-            }
-            sendByEnterRow = rowCount++;
-            distanceRow = rowCount++;
-            otherSectionRow = rowCount++;
+            // Mashahir: no "other settings" section (direct share, sensitive content, send by
+            // Enter, distance units) - nothing a school account needs
         } else {
             nightDisabledRow = rowCount++;  // TYPE_THEME_TYPE
             nightScheduledRow = rowCount++; // TYPE_THEME_TYPE
