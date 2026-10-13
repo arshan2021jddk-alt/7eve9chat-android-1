@@ -2105,6 +2105,15 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                } else {
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
+            } else if (currentReaction.emojicon != null && Emoji.getEmojiBigDrawable(currentReaction.emojicon) != null) {
+                // Mashahir: the picker shows the app's own emoji (the same look as the emoji keyboard and
+                // the reactions on messages), at 3/4 of the cell: they fill their frame, Telegram's icons have padding
+                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+                if (lockIconView != null) {
+                    lockIconView.setImageReceiver(loopImageView.getImageReceiver());
+                }
             } else if (currentReaction.emojicon != null) {
                 TLRPC.TL_availableReaction defaultReaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
                 if (defaultReaction != null) {
@@ -2680,4 +2689,47 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
         return starSelectedGradientPaint;
     }
 
+
+    // Mashahir: an emoji drawn at 3/4 of its bounds, centred (reaction picker)
+    private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
+        if (d == null) return null;
+        return new android.graphics.drawable.Drawable() {
+            private int alpha = 255;
+
+            @Override
+            public void draw(@NonNull Canvas canvas) {
+                android.graphics.Rect b = getBounds();
+                int w = b.width() * 3 / 4, h = b.height() * 3 / 4;
+                int l = b.centerX() - w / 2, t = b.centerY() - h / 2;
+                d.setBounds(l, t, l + w, t + h);
+                d.setAlpha(alpha);
+                d.draw(canvas);
+            }
+
+            @Override
+            public void setAlpha(int a) {
+                alpha = a;
+            }
+
+            @Override
+            public void setColorFilter(@androidx.annotation.Nullable android.graphics.ColorFilter colorFilter) {
+                d.setColorFilter(colorFilter);
+            }
+
+            @Override
+            public int getOpacity() {
+                return android.graphics.PixelFormat.TRANSLUCENT;
+            }
+
+            @Override
+            public int getIntrinsicWidth() {
+                return d.getIntrinsicWidth();
+            }
+
+            @Override
+            public int getIntrinsicHeight() {
+                return d.getIntrinsicHeight();
+            }
+        };
+    }
 }
