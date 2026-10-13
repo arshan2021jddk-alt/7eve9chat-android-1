@@ -4429,6 +4429,7 @@ public class ChatActivity extends BaseFragment implements
             }
             if (currentUser != null && currentUser.id != UserObject.VERIFY && currentUser.id != UserObject.REPLY_BOT) {
                 addContactItem = headerItem.lazilyAddSubItem(share_contact, R.drawable.msg_addcontact, LocaleController.getString(R.string.AddToContacts));
+                addContactItem.setVisibility(View.GONE); // Mashahir
             }
             if (currentEncryptedChat != null) {
                 timeItem2 = headerItem.lazilyAddSubItem(chat_enc_timer, R.drawable.msg_autodelete, LocaleController.getString(R.string.SetTimer));
@@ -29082,6 +29083,12 @@ public class ChatActivity extends BaseFragment implements
         boolean chatWithAdminChannel = preferences.getBoolean("dialog_bar_chat_with_channel" + did, false);
         int chatWithAdminDate = preferences.getInt("dialog_bar_chat_with_date" + did, 0);
         boolean showAddMembersToGroup = preferences.getBoolean("dialog_bar_invite" + did, false);
+        // Mashahir: no "add contact", "share my number" or "add to a group" in that bar - contacts
+        // are the school's people, there are no phone numbers and the office fills the groups.
+        // "Report" (it goes to the office) and "Block" stay.
+        showAdd = false;
+        showShare = false;
+        showAddMembersToGroup = false;
         TLRPC.EmojiStatus showEmojiStatusReport = currentUser != null && (showReport || showBlock) ? DialogObject.filterEmojiStatus(currentUser.emoji_status) : null;
         TL_bots.botVerification showBotVerificationReport = (show && (showReport || showBlock) || shownBotVerification || preferences.getBoolean("dialog_bar_botver" + did, true)) ? (userInfo != null && !UserObject.isUserSelf(currentUser) && userInfo.bot_verification != null ? userInfo.bot_verification : chatInfo != null && chatInfo.bot_verification != null ? chatInfo.bot_verification : null) : null;
         long showCost = 0;
@@ -29379,7 +29386,7 @@ public class ChatActivity extends BaseFragment implements
                 if (topChatPanelView == null) {
                     return;
                 }
-                addContactItem.setVisibility(View.VISIBLE);
+                addContactItem.setVisibility(View.GONE); // Mashahir: no add-to-contacts / share-my-contact (no phone numbers; contacts are the school)
                 addContactItem.setText(LocaleController.getString(R.string.AddToContacts));
                 addToContactsButton.setVisibility(View.VISIBLE);
                 if (showArchive) {
@@ -29402,7 +29409,7 @@ public class ChatActivity extends BaseFragment implements
                 if (topChatPanelView == null) {
                     return;
                 }
-                addContactItem.setVisibility(View.VISIBLE);
+                addContactItem.setVisibility(View.GONE); // Mashahir: no add-to-contacts / share-my-contact (no phone numbers; contacts are the school)
                 addToContactsButton.setVisibility(View.VISIBLE);
                 addContactItem.setText(LocaleController.getString(R.string.ShareMyContactInfo));
                 addToContactsButton.setText(LocaleController.getString(R.string.ShareMyPhoneNoCaps));
@@ -29414,7 +29421,7 @@ public class ChatActivity extends BaseFragment implements
                     if (topChatPanelView == null) {
                         return;
                     }
-                    addContactItem.setVisibility(View.VISIBLE);
+                    addContactItem.setVisibility(View.GONE); // Mashahir: no add-to-contacts / share-my-contact (no phone numbers; contacts are the school)
                     addContactItem.setText(LocaleController.getString(R.string.ShareMyContactInfo));
                     addToContactsButton.setTag(2);
                 } else if (addContactItem != null) {
