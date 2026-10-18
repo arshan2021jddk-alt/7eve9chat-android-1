@@ -14099,6 +14099,9 @@ public class RestBridge {
         String msg = e.message == null ? "" : e.message;
         if (e.statusCode == 429) {
             error.text = "FLOOD_WAIT_60";
+        } else if (msg.contains("PHONE_NUMBER_BANNED")) {
+            error.code = 400;
+            error.text = "PHONE_NUMBER_BANNED"; // suspended account: the app says the number is banned
         } else if (msg.contains("SMS_SEND_FAILED")) {
             error.text = "SMS_CODE_CREATE_FAILED"; // the SMS service is down: tell the user, don't wait for a code
         } else {
@@ -14111,7 +14114,10 @@ public class RestBridge {
         TLRPC.TL_error error = new TLRPC.TL_error();
         error.code = e.statusCode;
         String msg = e.message == null ? "" : e.message.toLowerCase();
-        if (msg.contains("expired")) {
+        if (msg.contains("phone_number_banned") || msg.contains("suspended")) {
+            error.code = 400;
+            error.text = "PHONE_NUMBER_BANNED";
+        } else if (msg.contains("expired")) {
             error.text = "PHONE_CODE_EXPIRED";
         } else if (msg.contains("invalid")) {
             error.text = "PHONE_CODE_INVALID";
