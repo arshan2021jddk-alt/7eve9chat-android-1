@@ -1686,6 +1686,7 @@ public class ChatActivity extends BaseFragment implements
     private final static int charge_fee = 72;
 
     private final static int chat_menu_topic_create = 73;
+    private final static int start_secret_chat = 890; // 7eve9chat: "Start secret chat" in the private chat's menu, as in the profile
 
     private final static int id_chat_compose_panel = 1000;
 
@@ -4075,6 +4076,19 @@ public class ChatActivity extends BaseFragment implements
                     }
                 } else if (id == chat_menu_topic_create) {
                     presentFragment(TopicCreateFragment.create(-dialog_id, 0).setOpenInChatActivity(ChatActivity.this));
+                } else if (id == start_secret_chat) {
+                    AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity(), themeDelegate);
+                    builder.setTitle(LocaleController.getString(R.string.AreYouSureSecretChatTitle));
+                    builder.setMessage(LocaleController.getString(R.string.AreYouSureSecretChat));
+                    builder.setPositiveButton(LocaleController.getString(R.string.Start), (dialogInterface, i) -> {
+                        if (getMessagesController().isFrozen()) {
+                            AccountFrozenAlert.show(currentAccount);
+                            return;
+                        }
+                        getSecretChatHelper().startSecretChat(getParentActivity(), currentUser);
+                    });
+                    builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+                    showDialog(builder.create());
                 } else if (id == 888) {
                     dumpCanvas();
                 } else if (id == 889) {
@@ -4429,6 +4443,11 @@ public class ChatActivity extends BaseFragment implements
             }
             if (currentUser != null && currentUser.id != UserObject.VERIFY && currentUser.id != UserObject.REPLY_BOT) {
                 addContactItem = headerItem.lazilyAddSubItem(share_contact, R.drawable.msg_addcontact, LocaleController.getString(R.string.AddToContacts));
+            }
+            if (currentUser != null && currentEncryptedChat == null && !UserObject.isDeleted(currentUser) && !currentUser.bot && !currentUser.self
+                    && !MessagesController.isSupportUser(currentUser) && currentUser.id != 333000 && currentUser.id != 777000 && currentUser.id != 42777
+                    && chatMode == MODE_DEFAULT && !isTopic) {
+                headerItem.lazilyAddSubItem(start_secret_chat, R.drawable.msg_secret, LocaleController.getString(R.string.StartEncryptedChat));
             }
             if (currentEncryptedChat != null) {
                 timeItem2 = headerItem.lazilyAddSubItem(chat_enc_timer, R.drawable.msg_autodelete, LocaleController.getString(R.string.SetTimer));
