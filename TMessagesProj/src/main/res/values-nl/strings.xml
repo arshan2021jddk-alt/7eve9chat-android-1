@@ -692,7 +692,7 @@
     <string name="AuthAnotherClientNotFound">Geen authenticatie-token gevonden</string>
     <string name="AuthAnotherClientOk">Authenticatie gelukt</string>
     <string name="AuthAnotherClientDownloadClientUrl">https://desktop.telegram.org/</string>
-    <string name="AuthAnotherWebClientUrl">https://7echat.ir</string>
+    <string name="AuthAnotherWebClientUrl">https://web.7echat.ir/web-k/</string>
     <string name="AuthAnotherClientInfo1">Download 7eve9Chat op je computer via *desktop.telegram.org*</string>
     <string name="AuthAnotherClientInfo2">Gebruik 7eve9Chat Desktop om de QR-code te krijgen.</string>
     <string name="AuthAnotherClientInfo3">Scan de QR-Code om met je account te verbinden.</string>

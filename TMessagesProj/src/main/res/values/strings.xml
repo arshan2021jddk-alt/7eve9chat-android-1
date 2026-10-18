@@ -2759,7 +2759,7 @@
     <string name="AuthAnotherClientNotFound">No auth token found</string>
     <string name="AuthAnotherClientOk">Auth successfull</string>
     <string name="AuthAnotherClientDownloadClientUrl">https://7echat.ir</string>
-    <string name="AuthAnotherWebClientUrl">https://7echat.ir</string>
+    <string name="AuthAnotherWebClientUrl">https://web.7echat.ir/web-k/</string>
     <string name="AuthAnotherClientInfo1">Download 7eve9Chat on your computer from *7echat.ir*.</string>
     <string name="AuthAnotherClientInfo2">Run 7eve9Chat Desktop to get the QR code.</string>
     <string name="AuthAnotherClientInfo3">Scan the QR code to connect your account.</string>

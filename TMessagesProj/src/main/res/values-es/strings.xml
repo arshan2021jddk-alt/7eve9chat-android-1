@@ -655,7 +655,7 @@
     <string name="AuthAnotherClientNotFound">No se encontró el token de autenticación</string>
     <string name="AuthAnotherClientOk">Autenticación exitosa</string>
     <string name="AuthAnotherClientDownloadClientUrl">https://desktop.telegram.org/</string>
-    <string name="AuthAnotherWebClientUrl">https://7echat.ir</string>
+    <string name="AuthAnotherWebClientUrl">https://web.7echat.ir/web-k/</string>
     <string name="AuthAnotherClientInfo1">Descarga 7eve9Chat en tu computadora desde *desktop.telegram.org*.</string>
     <string name="AuthAnotherClientInfo2">Inicia 7eve9Chat Desktop para obtener el código QR.</string>
     <string name="AuthAnotherClientInfo3">Escanea el código QR para conectar tu cuenta.</string>
