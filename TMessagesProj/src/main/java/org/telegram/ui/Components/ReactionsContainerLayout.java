@@ -2106,8 +2106,8 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
             } else if (currentReaction.emojicon != null && Emoji.getEmojiBigDrawable(currentReaction.emojicon) != null) {
-                // 7eve9chat: picker shows the app's own emoji (same look as in messages),
-                // at 2/3 of the cell - they fill the frame, Telegram's icons have padding
+                // 7eve9chat: the picker shows the app's own emoji (the same look as the emoji keyboard and
+                // the reactions on messages), at 3/4 of the cell: they fill their frame, Telegram's icons have padding
                 enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
                 loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
                 pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
@@ -2690,7 +2690,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     }
 
 
-    // Draws an emoji at 2/3 of its bounds, centered (7eve9chat reactions)
+    // 7eve9chat: an emoji drawn at 3/4 of its bounds, centred (reaction picker)
     private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
         if (d == null) return null;
         return new android.graphics.drawable.Drawable() {
@@ -2699,7 +2699,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
             @Override
             public void draw(@NonNull Canvas canvas) {
                 android.graphics.Rect b = getBounds();
-                int w = b.width() * 2 / 3, h = b.height() * 2 / 3;
+                int w = b.width() * 3 / 4, h = b.height() * 3 / 4;
                 int l = b.centerX() - w / 2, t = b.centerY() - h / 2;
                 d.setBounds(l, t, l + w, t + h);
                 d.setAlpha(alpha);

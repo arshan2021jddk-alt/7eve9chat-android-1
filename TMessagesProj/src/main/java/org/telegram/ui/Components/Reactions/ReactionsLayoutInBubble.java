@@ -927,8 +927,8 @@ public class ReactionsLayoutInBubble {
 //                    }
                     particles = reuseFrom != null && reuseFrom.particles != null ? reuseFrom.particles : new StarsReactionsSheet.Particles(StarsReactionsSheet.Particles.TYPE_RADIAL, SharedConfig.getDevicePerformanceClass() == SharedConfig.PERFORMANCE_CLASS_HIGH ? 18 : 8);
                 } else if (visibleReaction.emojicon != null) {
-                    // 7eve9chat: draw reactions with the app's own emoji set,
-                    // so they look exactly like emoji in messages.
+                    // 7eve9chat: reactions drawn with the app's own emoji, so they look exactly like the
+                    // emoji keyboard and the emoji in messages
                     android.graphics.drawable.Drawable emojiDrawable = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
                     TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(visibleReaction.emojicon);
                     if (emojiDrawable != null) {
@@ -1166,8 +1166,11 @@ public class ReactionsLayoutInBubble {
                     X = dp(6);
                     imageReceiver.setRoundRadius(dp(6));
                 } else {
-                    size = dp(12); // 7eve9chat: our emoji fill the whole frame - 2/3 of the old size
-                    X = dp(12);
+                    // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding),
+                    // so 16dp looks like Telegram's 20dp; centred where the 20dp icon was
+                    final boolean ownEmoji = visibleReaction != null && visibleReaction.emojicon != null && !visibleReaction.isStar;
+                    size = ownEmoji ? dp(16) : dp(20);
+                    X = ownEmoji ? dp(10) : dp(8);
                     imageReceiver.setRoundRadius(0);
                 }
                 int Y = (int) ((height - size) / 2f);
@@ -1636,7 +1639,7 @@ public class ReactionsLayoutInBubble {
             android.graphics.drawable.Drawable emojiDrawable = reaction.emojicon != null ? org.telegram.messenger.Emoji.getEmojiBigDrawable(reaction.emojicon) : null;
             TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(reaction.emojicon);
             if (emojiDrawable != null) {
-                imageReceiver.setImageBitmap(emojiDrawable);
+                imageReceiver.setImageBitmap(emojiDrawable); // 7eve9chat: the app's own emoji
             } else if (r != null) {
                 imageReceiver.setImage(ImageLocation.getForDocument(r.center_icon), "40_40_nolimit", null, "tgs", r, 1);
             }
