@@ -139,6 +139,9 @@ public class SocketBridge {
             }
         });
         // Calls (Telegram's own call screens; see RestBridge "Calls")
+        socket.on("secret_chat", args -> onSecretEvent(args, 0));
+        socket.on("secret_message", args -> onSecretEvent(args, 1));
+        socket.on("secret_typing", args -> onSecretEvent(args, 2));
         socket.on("phone_call", args -> onCallEvent(args, 0));
         socket.on("phone_call_signaling", args -> onCallEvent(args, 1));
         socket.on("group_call", args -> onCallEvent(args, 2));
@@ -167,6 +170,7 @@ public class SocketBridge {
             }
             // Catch up on anything sent while we were offline.
             refreshDialogs();
+            syncSecretChats();
         });
         socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
             if (args.length > 0) {
@@ -634,6 +638,57 @@ public class SocketBridge {
         } catch (Exception e) {
             FileLog.e(e);
         }
+    }
+
+    // Secret chats (end-to-end encrypted): 0 = secret_chat, 1 = secret_message, 2 = secret_typing
+    private void onSecretEvent(Object[] args, int kind) {
+        try {
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
+                return;
+            }
+            JSONObject payload = (JSONObject) args[0];
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            TLRPC.TL_updates updates;
+            if (kind == 0) {
+                updates = rest.secretChatUpdatesFromSocket(payload);
+            } else if (kind == 1) {
+                updates = rest.secretMessageUpdatesFromSocket(payload);
+            } else {
+                updates = rest.secretTypingFromSocket(payload);
+            }
+            if (!updates.updates.isEmpty()) {
+                deliver(updates);
+                if (kind == 1) {
+                    rest.secretAck(payload.optInt("qts"));
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // after (re)connecting: my secret chats and the packets that arrived while this device was offline
+    private void syncSecretChats() {
+        new Thread(() -> {
+            try {
+                RestBridge rest = RestBridge.getInstance(currentAccount);
+                TLRPC.TL_updates updates = rest.secretSyncUpdates();
+                if (!updates.updates.isEmpty()) {
+                    deliver(updates);
+                    int maxQts = 0;
+                    for (TLRPC.Update u : updates.updates) {
+                        if (u instanceof org.telegram.tgnet.tl.TL_update.TL_updateNewEncryptedMessage) {
+                            maxQts = Math.max(maxQts, ((org.telegram.tgnet.tl.TL_update.TL_updateNewEncryptedMessage) u).qts);
+                        }
+                    }
+                    if (maxQts > 0) {
+                        rest.secretAck(maxQts);
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        }).start();
     }
 
     private void onGiftsChanged(Object... args) {

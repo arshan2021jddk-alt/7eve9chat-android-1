@@ -609,6 +609,9 @@ public class RestBridge {
             if (handleCallRequest(request, onComplete)) {
                 return true;
             }
+            if (handleSecretChatRequest(request, onComplete)) {
+                return true;
+            }
             if (handlePasswordRequest(request, onComplete)) {
                 return true;
             }
@@ -7765,6 +7768,302 @@ public class RestBridge {
             + "9458705ac68cd4fe6b6b13abdc9746512969328454f18faf8c595f642477fe96bb2a941d5bcd1d4ac8cc49880708fa9b378e3c4f3a9060bee67cf9a4a4a695811051907e"
             + "162753b56b0f6b410dba74d8a84b2a14b3144e0ef1284754fd17ed950d5965b4b9dd46582db1178d169c6bc465b0d6ff9ca3928fef5b9ae4e418fc15e83ebea0f87fa9ff5"
             + "eed70050ded2849f47bf959d956850ce929851f0d8115f635b105ee2e4e15d04b2454bf6f4fadf034b10403119cd8e3b92fcc5b";
+
+    // ===============================================================
+    // Secret chats: messages.requestEncryption / acceptEncryption / discardEncryption / sendEncrypted* / receivedQueue.
+    // The stock app does all the cryptography (Diffie-Hellman, AES-IGE); the backend (/api/secret/*) is a BLIND relay that
+    // only carries the public DH halves and ciphertext, and deletes a packet as soon as the device confirms it.
+    // ===============================================================
+    private final java.util.concurrent.ConcurrentHashMap<Integer, String> secretAccessHash = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static long secretLong(String s) {
+        try {
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private TLRPC.EncryptedChat buildSecretChat(JSONObject c) {
+        int id = c.optInt("id");
+        String hash = c.optString("accessHash", "");
+        if (!hash.isEmpty()) secretAccessHash.put(id, hash);
+        String adminMongo = c.optString("adminId", "");
+        String participantMongo = c.optString("participantId", "");
+        long admin = idFromMongoId(adminMongo);
+        long participant = idFromMongoId(participantMongo);
+        userMongoIdByTlId.put(admin, adminMongo);
+        userMongoIdByTlId.put(participant, participantMongo);
+        String state = c.optString("state", "");
+        if ("discarded".equals(state)) {
+            TLRPC.TL_encryptedChatDiscarded gone = new TLRPC.TL_encryptedChatDiscarded();
+            gone.id = id;
+            return gone;
+        }
+        TLRPC.EncryptedChat chat;
+        if ("active".equals(state)) {
+            TLRPC.TL_encryptedChat active = new TLRPC.TL_encryptedChat();
+            active.g_a_or_b = unb64(c.optString("gAorB", ""));
+            active.key_fingerprint = secretLong(c.optString("keyFingerprint", "0"));
+            chat = active;
+        } else if ("admin".equals(c.optString("role", ""))) {
+            chat = new TLRPC.TL_encryptedChatWaiting();
+        } else {
+            TLRPC.TL_encryptedChatRequested asked = new TLRPC.TL_encryptedChatRequested();
+            asked.g_a = unb64(c.optString("gA", ""));
+            chat = asked;
+        }
+        chat.id = id;
+        chat.access_hash = secretLong(hash);
+        chat.date = c.optInt("date");
+        chat.admin_id = admin;
+        chat.participant_id = participant;
+        return chat;
+    }
+
+    private static byte[] secretBytes(NativeByteBuffer buffer) {
+        if (buffer == null) return new byte[0];
+        int position = buffer.position();
+        byte[] out = new byte[buffer.remaining()];
+        buffer.readBytes(out, false);
+        buffer.position(position);
+        return out;
+    }
+
+    private void completeSecretError(RequestDelegate onComplete, Exception e) {
+        if (e instanceof RestException) {
+            RestException re = (RestException) e;
+            String code = re.message != null && re.message.matches("[A-Z0-9_]{3,}") ? re.message : (re.statusCode == 429 ? "FLOOD_WAIT_5" : "ENCRYPTION_DECLINED");
+            complete(onComplete, null, tlError(re.statusCode > 0 ? re.statusCode : 400, code));
+        } else {
+            complete(onComplete, null, genericError(e));
+        }
+    }
+
+    // the access hash of a chat id (the discard request carries only the id); refilled by a sync when the app was restarted
+    private String secretHashFor(int chatId) {
+        String hash = secretAccessHash.get(chatId);
+        if (hash == null) {
+            try {
+                secretSyncUpdates();
+            } catch (Exception ignore) {
+            }
+            hash = secretAccessHash.get(chatId);
+        }
+        return hash == null ? "" : hash;
+    }
+
+    private boolean handleSecretChatRequest(TLObject request, RequestDelegate onComplete) {
+        if (request instanceof TLRPC.TL_messages_requestEncryption) {
+            TLRPC.TL_messages_requestEncryption req = (TLRPC.TL_messages_requestEncryption) request;
+            executor.execute(() -> {
+                try {
+                    String userMongoId = req.user_id instanceof TLRPC.TL_inputUser ? userMongoIdByTlId.get(((TLRPC.TL_inputUser) req.user_id).user_id) : null;
+                    if (userMongoId == null) {
+                        complete(onComplete, null, tlError(400, "USER_ID_INVALID"));
+                        return;
+                    }
+                    JSONObject body = new JSONObject();
+                    body.put("userId", userMongoId);
+                    body.put("gA", b64(req.g_a));
+                    body.put("randomId", req.random_id);
+                    JSONObject resp = request("POST", "/secret/request", body, true);
+                    complete(onComplete, buildSecretChat(resp.getJSONObject("chat")), null);
+                } catch (Exception e) {
+                    completeSecretError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_acceptEncryption) {
+            TLRPC.TL_messages_acceptEncryption req = (TLRPC.TL_messages_acceptEncryption) request;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("accessHash", Long.toString(req.peer.access_hash));
+                    body.put("gB", b64(req.g_b));
+                    body.put("keyFingerprint", Long.toString(req.key_fingerprint));
+                    JSONObject resp = request("POST", "/secret/" + req.peer.chat_id + "/accept", body, true);
+                    complete(onComplete, buildSecretChat(resp.getJSONObject("chat")), null);
+                } catch (Exception e) {
+                    completeSecretError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_discardEncryption) {
+            TLRPC.TL_messages_discardEncryption req = (TLRPC.TL_messages_discardEncryption) request;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("accessHash", secretHashFor(req.chat_id));
+                    request("POST", "/secret/" + req.chat_id + "/discard", body, true);
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                } catch (Exception e) {
+                    // already gone on the server is the same as discarded
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_sendEncrypted || request instanceof TLRPC.TL_messages_sendEncryptedService) {
+            final TLRPC.TL_inputEncryptedChat peer = request instanceof TLRPC.TL_messages_sendEncrypted
+                    ? ((TLRPC.TL_messages_sendEncrypted) request).peer : ((TLRPC.TL_messages_sendEncryptedService) request).peer;
+            final long randomId = request instanceof TLRPC.TL_messages_sendEncrypted
+                    ? ((TLRPC.TL_messages_sendEncrypted) request).random_id : ((TLRPC.TL_messages_sendEncryptedService) request).random_id;
+            final byte[] data = secretBytes(request instanceof TLRPC.TL_messages_sendEncrypted
+                    ? ((TLRPC.TL_messages_sendEncrypted) request).data : ((TLRPC.TL_messages_sendEncryptedService) request).data);
+            executor.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("accessHash", Long.toString(peer.access_hash));
+                    body.put("randomId", Long.toString(randomId));
+                    body.put("data", b64(data));
+                    JSONObject resp = request("POST", "/secret/" + peer.chat_id + "/send", body, true);
+                    TLRPC.TL_messages_sentEncryptedMessage res = new TLRPC.TL_messages_sentEncryptedMessage();
+                    res.date = resp.optInt("date", (int) (System.currentTimeMillis() / 1000L));
+                    complete(onComplete, res, null);
+                } catch (Exception e) {
+                    completeSecretError(onComplete, e);
+                }
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_sendEncryptedFile) {
+            // encrypted media is a later step: fail clearly instead of hanging
+            complete(onComplete, null, tlError(400, "ENCRYPTION_FILES_UNSUPPORTED"));
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_receivedQueue) {
+            final int maxQts = ((TLRPC.TL_messages_receivedQueue) request).max_qts;
+            executor.execute(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("qts", maxQts);
+                    request("POST", "/secret/ack", body, true);
+                } catch (Exception ignore) {
+                }
+                complete(onComplete, null, null);
+            });
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_setEncryptedTyping) {
+            final TLRPC.TL_messages_setEncryptedTyping req = (TLRPC.TL_messages_setEncryptedTyping) request;
+            if (req.typing) {
+                executor.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        body.put("accessHash", Long.toString(req.peer.access_hash));
+                        request("POST", "/secret/" + req.peer.chat_id + "/typing", body, true);
+                    } catch (Exception ignore) {
+                    }
+                });
+            }
+            complete(onComplete, new TLRPC.TL_boolTrue(), null);
+            return true;
+        }
+        if (request instanceof TLRPC.TL_messages_readEncryptedHistory) {
+            complete(onComplete, new TLRPC.TL_boolTrue(), null); // read receipts travel inside the encrypted service messages
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean secretForOtherDevice(JSONObject payload, String myDeviceId) {
+        if (payload.isNull("forDevice")) return false;
+        String target = payload.optString("forDevice", "");
+        return !target.isEmpty() && !target.equals(myDeviceId);
+    }
+
+    private void secretAddUsers(JSONObject resp, ArrayList<TLRPC.User> out) {
+        JSONArray users = resp == null ? null : resp.optJSONArray("users");
+        if (users == null) return;
+        java.util.HashSet<Long> added = new java.util.HashSet<>();
+        for (int i = 0; i < users.length(); i++) {
+            addCallUser(users.optJSONObject(i), out, added);
+        }
+    }
+
+    // Socket "secret_chat" {chat, users, forDevice} -> updateEncryption
+    public TLRPC.TL_updates secretChatUpdatesFromSocket(JSONObject payload) throws Exception {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        if (secretForOtherDevice(payload, currentDeviceId())) return updates;
+        JSONObject chat = payload.optJSONObject("chat");
+        if (chat == null) return updates;
+        TL_update.TL_updateEncryption u = new TL_update.TL_updateEncryption();
+        u.chat = buildSecretChat(chat);
+        u.date = chat.optInt("date", updates.date);
+        updates.updates.add(u);
+        secretAddUsers(payload, updates.users);
+        return updates;
+    }
+
+    private TL_update.TL_updateNewEncryptedMessage secretMessageUpdate(JSONObject m) {
+        TLRPC.TL_encryptedMessage message = new TLRPC.TL_encryptedMessage();
+        message.random_id = secretLong(m.optString("randomId", "0"));
+        message.chat_id = m.optInt("chatId");
+        message.date = m.optInt("date");
+        message.bytes = unb64(m.optString("data", ""));
+        message.file = new TLRPC.TL_encryptedFileEmpty();
+        TL_update.TL_updateNewEncryptedMessage u = new TL_update.TL_updateNewEncryptedMessage();
+        u.message = message;
+        u.qts = m.optInt("qts");
+        return u;
+    }
+
+    // Socket "secret_message" {chatId, randomId, date, qts, data, forDevice} -> updateNewEncryptedMessage
+    public TLRPC.TL_updates secretMessageUpdatesFromSocket(JSONObject payload) {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        if (secretForOtherDevice(payload, currentDeviceId())) return updates;
+        updates.updates.add(secretMessageUpdate(payload));
+        return updates;
+    }
+
+    // Socket "secret_typing" {chatId, forDevice}
+    public TLRPC.TL_updates secretTypingFromSocket(JSONObject payload) {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        if (secretForOtherDevice(payload, currentDeviceId())) return updates;
+        TL_update.TL_updateEncryptedChatTyping u = new TL_update.TL_updateEncryptedChatTyping();
+        u.chat_id = payload.optInt("chatId");
+        updates.updates.add(u);
+        return updates;
+    }
+
+    // GET /secret/sync: my secret chats and the packets waiting for this device (on connect / app start)
+    public TLRPC.TL_updates secretSyncUpdates() throws Exception {
+        TLRPC.TL_updates updates = new TLRPC.TL_updates();
+        updates.date = (int) (System.currentTimeMillis() / 1000L);
+        JSONObject resp = request("GET", "/secret/sync", null, true);
+        secretAddUsers(resp, updates.users);
+        JSONArray chats = resp.optJSONArray("chats");
+        for (int i = 0; chats != null && i < chats.length(); i++) {
+            JSONObject chat = chats.getJSONObject(i);
+            TL_update.TL_updateEncryption u = new TL_update.TL_updateEncryption();
+            u.chat = buildSecretChat(chat);
+            u.date = chat.optInt("date", updates.date);
+            updates.updates.add(u);
+        }
+        JSONArray messages = resp.optJSONArray("messages");
+        for (int i = 0; messages != null && i < messages.length(); i++) {
+            updates.updates.add(secretMessageUpdate(messages.getJSONObject(i)));
+        }
+        return updates;
+    }
+
+    // tell the server this device has everything up to qts (the stock app does it too, but not on every path)
+    public void secretAck(int qts) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("qts", qts);
+                request("POST", "/secret/ack", body, true);
+            } catch (Exception ignore) {
+            }
+        });
+    }
 
     private boolean handleCallRequest(TLObject request, RequestDelegate onComplete) {
         if (request instanceof TLRPC.TL_messages_getDhConfig) {
