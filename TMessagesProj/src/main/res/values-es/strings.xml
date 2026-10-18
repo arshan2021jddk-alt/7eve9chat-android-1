@@ -401,7 +401,7 @@
     <string name="LanguageUnsupportedError">Idioma no encontrado.</string>
     <string name="LanguageSame">Ya estás usando este pack de idioma (**%1$s**). Puedes cambiar el idioma cuando quieras en Ajustes.</string>
     <string name="LanguageUnknownCustomAlert">Lamentablemente, este pack de idioma personalizado (**%1$s**) no contiene datos para 7eve9Chat Android.</string>
-    <string name="AskAQuestionInfo">Ten en cuenta que el soporte de 7eve9Chat está en manos de voluntarios. Respondemos lo antes posible, pero puede tomar tiempo.\n\nPuedes mirar las <![CDATA[<a href=\"https://7eve9craft.ir\">preguntas frecuentes de 7eve9Chat</a>]]>: tienen <![CDATA[<a href=\"https://7eve9craft.ir\">soluciones a problemas</a>]]> y respuestas a muchas preguntas.</string>
+    <string name="AskAQuestionInfo">Ten en cuenta que el soporte de 7eve9Chat está en manos de voluntarios. Respondemos lo antes posible, pero puede tomar tiempo.\n\nPuedes mirar las <![CDATA[<a href=\"https://7echat.ir\">preguntas frecuentes de 7eve9Chat</a>]]>: tienen <![CDATA[<a href=\"https://7echat.ir\">soluciones a problemas</a>]]> y respuestas a muchas preguntas.</string>
     <string name="AskButton">Preguntar</string>
     <string name="TelegramFAQ">Preguntas frecuentes</string>
     <string name="TelegramFaq">Preguntas frecuentes</string>
@@ -409,13 +409,13 @@
     <string name="TelegramFeaturesUrl">https://t.me/TelegramTipsES</string>
     <string name="AddAccount">Añadir cuenta</string>
     <string name="SelectAccount">Elige una cuenta</string>
-    <string name="TelegramFaqUrl">https://7eve9craft.ir</string>
+    <string name="TelegramFaqUrl">https://7echat.ir</string>
     <string name="PrivacyPolicy">Política de privacidad</string>
     <string name="TermsOfService">Términos de servicio</string>
     <string name="TermsOfServiceLogin">Al registrarte, aceptas\nlos *términos de servicio*.</string>
-    <string name="PrivacyPolicyUrl">https://7eve9craft.ir</string>
-    <string name="TermsOfServiceUrl">https://7eve9craft.ir</string>
-    <string name="WebAppDisclaimerUrl">https://7eve9craft.ir</string>
+    <string name="PrivacyPolicyUrl">https://7echat.ir</string>
+    <string name="TermsOfServiceUrl">https://7echat.ir</string>
+    <string name="WebAppDisclaimerUrl">https://7echat.ir</string>
     <string name="DeleteLocalizationTitle">Eliminar pack de idioma</string>
     <string name="DeleteLocalizationText">¿Quieres eliminar el pack de idioma **%1$s**?</string>
     <string name="IncorrectLocalization">Archivo de traducción incorrecto</string>
@@ -655,7 +655,7 @@
     <string name="AuthAnotherClientNotFound">No se encontró el token de autenticación</string>
     <string name="AuthAnotherClientOk">Autenticación exitosa</string>
     <string name="AuthAnotherClientDownloadClientUrl">https://desktop.telegram.org/</string>
-    <string name="AuthAnotherWebClientUrl">https://7eve9craft.ir</string>
+    <string name="AuthAnotherWebClientUrl">https://7echat.ir</string>
     <string name="AuthAnotherClientInfo1">Descarga 7eve9Chat en tu computadora desde *desktop.telegram.org*.</string>
     <string name="AuthAnotherClientInfo2">Inicia 7eve9Chat Desktop para obtener el código QR.</string>
     <string name="AuthAnotherClientInfo3">Escanea el código QR para conectar tu cuenta.</string>
@@ -699,7 +699,7 @@
     <string name="ChannelDescriptionChanged">Descripción del canal cambiada.</string>
     <string name="CheckPhoneNumber">¿El %1$s aún es tu número?</string>
     <string name="CheckPhoneNumberInfo">Ten siempre actualizado tu número para que puedas iniciar sesión en 7eve9Chat. **Saber más**</string>
-    <string name="CheckPhoneNumberLearnMoreUrl">https://7eve9craft.ir</string>
+    <string name="CheckPhoneNumberLearnMoreUrl">https://7echat.ir</string>
     <string name="CheckPhoneNumberYes">Sí</string>
     <string name="CheckPhoneNumberNo">No</string>
     <!--filters-->

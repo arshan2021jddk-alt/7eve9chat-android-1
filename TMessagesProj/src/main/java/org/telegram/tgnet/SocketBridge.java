@@ -30,7 +30,6 @@ import java.util.ArrayList;
  */
 public class SocketBridge {
 
-    private static final String SOCKET_URL = "https://7eve9craft.ir";
 
     private static final SocketBridge[] instances = new SocketBridge[UserConfig.MAX_ACCOUNT_COUNT];
 
@@ -49,6 +48,8 @@ public class SocketBridge {
 
     private final int currentAccount;
     private Socket socket;
+    private String socketHost = ApiHost.PRIMARY;
+    private int connectErrors;
     // Group/channel rooms (typing etc. are broadcast per conversation room);
     // re-joined on every (re)connect.
     private final java.util.Set<String> conversationRooms =
@@ -77,7 +78,8 @@ public class SocketBridge {
             }
             options.reconnection = true;
             options.forceNew = true;
-            socket = IO.socket(SOCKET_URL, options);
+            socketHost = ApiHost.host();
+            socket = IO.socket("https://" + socketHost, options);
         } catch (URISyntaxException e) {
             FileLog.e(e);
             return;
@@ -164,6 +166,7 @@ public class SocketBridge {
                 ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnecting));
         final Socket connectedSocket = socket;
         socket.on(Socket.EVENT_CONNECT, args -> {
+            connectErrors = 0;
             ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnected);
             for (String room : conversationRooms) {
                 connectedSocket.emit("join_conversation", room);
@@ -175,6 +178,28 @@ public class SocketBridge {
         socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
             if (args.length > 0) {
                 FileLog.d("SocketBridge connect error: " + args[0]);
+            }
+            // the main address does not answer at all: reconnect on the other one (and back later)
+            Throwable cause = args.length > 0 && args[0] instanceof Throwable ? (Throwable) args[0] : null;
+            while (cause != null && cause.getCause() != null && cause.getCause() != cause) {
+                cause = cause.getCause();
+            }
+            if (cause != null && ApiHost.isUnreachable(cause) && ++connectErrors >= 2) {
+                connectErrors = 0;
+                if (socketHost.equals(ApiHost.host())) {
+                    ApiHost.noteUnreachable(cause);
+                }
+                if (!socketHost.equals(ApiHost.host())) {
+                    Utilities.stageQueue.postRunnable(() -> {
+                        Socket old = socket;
+                        if (old != null) {
+                            old.off();
+                            old.disconnect();
+                            socket = null;
+                        }
+                        connect();
+                    });
+                }
             }
         });
 

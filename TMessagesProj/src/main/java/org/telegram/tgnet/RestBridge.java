@@ -66,7 +66,6 @@ import java.util.concurrent.Executors;
  */
 public class RestBridge {
 
-    public static final String BASE_URL = "https://7eve9craft.ir/api";
 
     private static final RestBridge[] instances = new RestBridge[UserConfig.MAX_ACCOUNT_COUNT];
 
@@ -326,7 +325,7 @@ public class RestBridge {
         TLRPC.TL_messages_availableReactions result = new TLRPC.TL_messages_availableReactions();
         result.hash = 7979;
         for (String[] r : REACTIONS) {
-            String base = "https://7eve9craft.ir/uploads/reactions/" + r[1];
+            String base = ApiHost.base() + "/uploads/reactions/" + r[1];
             TLRPC.TL_document loop = buildTgsDocument(base + ".tgs");
             TLRPC.TL_document appear = buildTgsDocument(base + "_appear.tgs");
             TLRPC.TL_document effect = buildTgsDocument(base + "_effect.tgs");
@@ -1457,7 +1456,7 @@ public class RestBridge {
                 TLRPC.Chat chat = org.telegram.messenger.MessagesController.getInstance(currentAccount).getChat(req.channel.channel_id);
                 String where = chat != null && chat.username != null ? chat.username : convId;
                 String msgMongo = messageMongoIdByTlId.get(req.id);
-                link.link = "https://7eve9craft.ir/" + (chat != null && chat.megagroup ? "gp/" : "cl/") + where + (msgMongo != null ? "?msg=" + msgMongo : "");
+                link.link = ApiHost.publicBase() + "/" + (chat != null && chat.megagroup ? "gp/" : "cl/") + where + (msgMongo != null ? "?msg=" + msgMongo : "");
                 link.html = "";
                 complete(onComplete, link, null);
                 return true;
@@ -6910,7 +6909,7 @@ public class RestBridge {
     // Invite links: one permanent link per chat on this backend.
     private TLRPC.TL_chatInviteExported buildInvite(String code, long adminId, boolean revoked) {
         TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-        invite.link = "https://7eve9craft.ir/invite/" + code;
+        invite.link = ApiHost.publicBase() + "/invite/" + code;
         invite.admin_id = adminId;
         invite.permanent = true;
         invite.revoked = revoked;
@@ -7499,7 +7498,7 @@ public class RestBridge {
         status.boosts = unlocked ? 100 : 0;
         status.next_level_boosts = unlocked ? 100 : 1;
         status.flags |= 1;
-        status.boost_url = "https://7eve9craft.ir";
+        status.boost_url = ApiHost.publicBase();
         complete(onComplete, status, null);
     }
 
@@ -7919,7 +7918,7 @@ public class RestBridge {
     }
 
     private JSONObject secretUploadBlob(java.io.File blob) throws Exception {
-        URL url = new URL(BASE_URL + "/secret/upload");
+        URL url = new URL(ApiHost.apiBase() + "/secret/upload");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         try {
             conn.setRequestMethod("POST");
@@ -10208,7 +10207,7 @@ public class RestBridge {
                         case "join_request_approved": {
                             if (targetId == 0) continue;
                             TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-                            invite.link = "https://7eve9craft.ir/";
+                            invite.link = ApiHost.publicBase() + "/";
                             invite.admin_id = actorId;
                             TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest a = new TLRPC.TL_channelAdminLogEventActionParticipantJoinByRequest();
                             a.invite = invite;
@@ -11128,7 +11127,7 @@ public class RestBridge {
 
                     TLRPC.TL_sponsoredMessage msg = new TLRPC.TL_sponsoredMessage();
                     msg.random_id = ad.getString("_id").getBytes(StandardCharsets.UTF_8);
-                    msg.url = ad.optString("link", "https://7eve9craft.ir");
+                    msg.url = ad.optString("link", ApiHost.publicBase());
                     msg.title = ad.optString("title", "");
                     msg.message = ad.optString("description", "");
                     msg.button_text = "Learn More";
@@ -11484,7 +11483,7 @@ public class RestBridge {
                 String code = resp.optString("inviteCode", "");
 
                 TLRPC.TL_chatInviteExported invite = new TLRPC.TL_chatInviteExported();
-                invite.link = "https://7eve9craft.ir/invite/" + code;
+                invite.link = ApiHost.publicBase() + "/invite/" + code;
                 invite.admin_id = selfMongoId != null ? idFromMongoId(selfMongoId) : 0;
                 invite.date = (int) (System.currentTimeMillis() / 1000L);
                 invite.permanent = true;
@@ -12784,7 +12783,7 @@ public class RestBridge {
         if (!maybeRelative.startsWith("/")) {
             maybeRelative = "/" + maybeRelative;
         }
-        return "https://7eve9craft.ir" + maybeRelative;
+        return ApiHost.base() + maybeRelative;
     }
 
     // Full profile photo; with a video avatar it also carries a "u" video
@@ -14241,7 +14240,18 @@ public class RestBridge {
     }
 
     private String requestTextRaw(String method, String path, JSONObject body, boolean auth) throws Exception {
-        URL url = new URL(BASE_URL + path);
+        try {
+            return requestTextOnce(method, path, body, auth);
+        } catch (java.io.IOException e) {
+            if (ApiHost.noteUnreachable(e)) {
+                return requestTextOnce(method, path, body, auth); // the main address was not reachable: once more on the other
+            }
+            throw e;
+        }
+    }
+
+    private String requestTextOnce(String method, String path, JSONObject body, boolean auth) throws Exception {
+        URL url = new URL(ApiHost.apiBase() + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         try {
             conn.setRequestMethod(method);
@@ -14294,8 +14304,19 @@ public class RestBridge {
     }
 
     private JSONObject requestMultipartRaw(String method, String path, JSONObject fields, String fileField, java.io.File file, String fileName, String mimeType, boolean ownSend) throws Exception {
+        try {
+            return requestMultipartOnce(method, path, fields, fileField, file, fileName, mimeType, ownSend);
+        } catch (java.io.IOException e) {
+            if (ApiHost.noteUnreachable(e)) {
+                return requestMultipartOnce(method, path, fields, fileField, file, fileName, mimeType, ownSend);
+            }
+            throw e;
+        }
+    }
+
+    private JSONObject requestMultipartOnce(String method, String path, JSONObject fields, String fileField, java.io.File file, String fileName, String mimeType, boolean ownSend) throws Exception {
         String boundary = "----7eve9chat" + System.currentTimeMillis();
-        URL url = new URL(BASE_URL + path);
+        URL url = new URL(ApiHost.apiBase() + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         try {
             conn.setRequestMethod(method);
