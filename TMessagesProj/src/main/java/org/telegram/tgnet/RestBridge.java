@@ -7853,6 +7853,87 @@ public class RestBridge {
         return hash == null ? "" : hash;
     }
 
+    // the file reference of an encrypted attachment (JSON from the relay) as the app wants it
+    private TLRPC.EncryptedFile buildSecretFile(JSONObject f) {
+        if (f == null || !f.has("id")) return new TLRPC.TL_encryptedFileEmpty();
+        TLRPC.TL_encryptedFile file = new TLRPC.TL_encryptedFile();
+        file.id = secretLong(f.optString("id", "0"));
+        file.access_hash = secretLong(f.optString("accessHash", "0"));
+        file.size = f.optLong("size", 0);
+        file.dc_id = 2;
+        file.key_fingerprint = f.optInt("keyFingerprint", 0);
+        return file;
+    }
+
+    // upload the (already encrypted) file the app streamed as parts: the relay stores ciphertext under a random id
+    private JSONObject secretUploadFile(TLRPC.InputEncryptedFile input) throws Exception {
+        if (input == null || input instanceof TLRPC.TL_inputEncryptedFileEmpty) return null;
+        JSONObject file = new JSONObject();
+        if (input instanceof TLRPC.TL_inputEncryptedFile) {
+            file.put("id", Long.toString(input.id));
+            file.put("accessHash", Long.toString(input.access_hash));
+            file.put("keyFingerprint", 0);
+            return file;
+        }
+        TLRPC.TL_inputFile asInputFile = new TLRPC.TL_inputFile();
+        asInputFile.id = input.id;
+        asInputFile.parts = input.parts;
+        java.io.File assembled = assembleUpload(asInputFile);
+        try {
+            JSONObject up = secretUploadBlob(assembled);
+            file.put("id", up.getString("id"));
+            file.put("accessHash", up.getString("accessHash"));
+            file.put("keyFingerprint", input.key_fingerprint);
+            return file;
+        } finally {
+            assembled.delete();
+        }
+    }
+
+    private JSONObject secretUploadBlob(java.io.File blob) throws Exception {
+        URL url = new URL(BASE_URL + "/secret/upload");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setRequestProperty("Content-Type", "application/octet-stream");
+            conn.setRequestProperty("Accept", "application/json");
+            if (authToken != null) conn.setRequestProperty("Authorization", "Bearer " + authToken);
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(blob.length());
+            try (OutputStream os = conn.getOutputStream(); java.io.FileInputStream in = new java.io.FileInputStream(blob)) {
+                byte[] buf = new byte[64 * 1024];
+                int r;
+                while ((r = in.read(buf)) != -1) os.write(buf, 0, r);
+            }
+            int code = conn.getResponseCode();
+            String text = readAll(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream());
+            if (code < 200 || code >= 300) {
+                String msg = "Upload failed";
+                try {
+                    msg = new JSONObject(text).optString("message", msg);
+                } catch (Exception ignore) {
+                }
+                throw new RestException(code, msg);
+            }
+            return new JSONObject(text);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    // upload.getFile for an encrypted attachment: the id and access hash are the two halves of the file's random name
+    private String secretFileUrl(long id, long accessHash) {
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(16);
+        bb.putLong(id);
+        bb.putLong(accessHash);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : bb.array()) hex.append(String.format(Locale.US, "%02x", b));
+        String h = hex.toString();
+        return SITE + "/uploads/secret/" + h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20) + ".enc";
+    }
+
     private boolean handleSecretChatRequest(TLObject request, RequestDelegate onComplete) {
         if (request instanceof TLRPC.TL_messages_requestEncryption) {
             TLRPC.TL_messages_requestEncryption req = (TLRPC.TL_messages_requestEncryption) request;
@@ -7930,8 +8011,25 @@ public class RestBridge {
             return true;
         }
         if (request instanceof TLRPC.TL_messages_sendEncryptedFile) {
-            // encrypted media is a later step: fail clearly instead of hanging
-            complete(onComplete, null, tlError(400, "ENCRYPTION_FILES_UNSUPPORTED"));
+            final TLRPC.TL_messages_sendEncryptedFile req = (TLRPC.TL_messages_sendEncryptedFile) request;
+            final byte[] data = secretBytes(req.data);
+            executor.execute(() -> {
+                try {
+                    JSONObject file = secretUploadFile(req.file);
+                    JSONObject body = new JSONObject();
+                    body.put("accessHash", Long.toString(req.peer.access_hash));
+                    body.put("randomId", Long.toString(req.random_id));
+                    body.put("data", b64(data));
+                    if (file != null) body.put("file", file);
+                    JSONObject resp = request("POST", "/secret/" + req.peer.chat_id + "/send", body, true);
+                    TLRPC.TL_messages_sentEncryptedFile res = new TLRPC.TL_messages_sentEncryptedFile();
+                    res.date = resp.optInt("date", (int) (System.currentTimeMillis() / 1000L));
+                    res.file = buildSecretFile(resp.optJSONObject("file"));
+                    complete(onComplete, res, null);
+                } catch (Exception e) {
+                    completeSecretError(onComplete, e);
+                }
+            });
             return true;
         }
         if (request instanceof TLRPC.TL_messages_receivedQueue) {
@@ -8005,7 +8103,7 @@ public class RestBridge {
         message.chat_id = m.optInt("chatId");
         message.date = m.optInt("date");
         message.bytes = unb64(m.optString("data", ""));
-        message.file = new TLRPC.TL_encryptedFileEmpty();
+        message.file = buildSecretFile(m.optJSONObject("file"));
         TL_update.TL_updateNewEncryptedMessage u = new TL_update.TL_updateNewEncryptedMessage();
         u.message = message;
         u.qts = m.optInt("qts");
@@ -12571,6 +12669,9 @@ public class RestBridge {
                 if (url == null && req.location instanceof TLRPC.TL_inputDocumentFileLocation
                         && req.location.thumb_size != null && !req.location.thumb_size.isEmpty()) {
                     url = coverUrlByDocId.get(id); // a video's cover frame
+                }
+                if (url == null && req.location instanceof TLRPC.TL_inputEncryptedFileLocation) {
+                    url = secretFileUrl(req.location.id, req.location.access_hash); // secret-chat attachment (ciphertext)
                 }
                 if (url == null) {
                     url = mediaUrlById.get(id);
