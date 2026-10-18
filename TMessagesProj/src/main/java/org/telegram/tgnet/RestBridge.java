@@ -7105,6 +7105,20 @@ public class RestBridge {
             service.action = gc;
             return service;
         }
+        if ("system".equals(m.optString("type")) && action != null && "contact_signup".equals(action.optString("type"))) {
+            // "<name> joined 7eve9Chat!" in the chat of everyone who had the number in their phone book
+            TLRPC.TL_message base = buildTLMessage(m, peer);
+            TLRPC.TL_messageService service = new TLRPC.TL_messageService();
+            service.id = base.id;
+            service.date = base.date;
+            service.peer_id = base.peer_id;
+            service.dialog_id = base.dialog_id;
+            service.from_id = base.from_id;
+            service.out = false;
+            if (service.from_id != null) service.flags |= TLObject.FLAG_8;
+            service.action = new TLRPC.TL_messageActionContactSignUp();
+            return service;
+        }
         if ("system".equals(m.optString("type")) && action != null && "set_chat_theme".equals(action.optString("type"))) {
             TLRPC.TL_message base = buildTLMessage(m, peer);
             TLRPC.TL_messageService service = new TLRPC.TL_messageService();
