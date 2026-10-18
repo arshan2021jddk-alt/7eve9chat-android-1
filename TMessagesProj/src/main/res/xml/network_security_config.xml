@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Our own servers are only ever reached over HTTPS; other sites (link previews, streams) keep the old behaviour. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">7echat.ir</domain>
+        <domain includeSubdomains="true">7eve9craft.ir</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
