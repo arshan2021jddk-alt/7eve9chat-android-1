@@ -519,6 +519,20 @@ public class RestBridge {
         prefs().edit().putString("jwt", token).apply();
     }
 
+    // The server ended this session (logged out from all devices, device terminated, account suspended):
+    // the app signs out at once, like Telegram does on AUTH_KEY_UNREGISTERED.
+    private volatile long lastSessionEndedAt;
+    private void checkSessionEnded(int code, String message, boolean usedAuth) {
+        if (code != 401 || !usedAuth || authToken == null) return;
+        String m = message == null ? "" : message.toLowerCase(Locale.US);
+        if (!(m.contains("token") || m.contains("session") || m.contains("suspended") || m.contains("user not found"))) return;
+        long now = System.currentTimeMillis();
+        if (now - lastSessionEndedAt < 5000) return;
+        lastSessionEndedAt = now;
+        clearAuthToken();
+        ConnectionsManager.onLogout(currentAccount);
+    }
+
     public void clearAuthToken() {
         authToken = null;
         socketConnectAttempted = false;
@@ -7929,6 +7943,7 @@ public class RestBridge {
                     msg = new JSONObject(text).optString("message", msg);
                 } catch (Exception ignore) {
                 }
+                checkSessionEnded(code, msg, true);
                 throw new RestException(code, msg);
             }
             return new JSONObject(text);
@@ -14257,6 +14272,7 @@ public class RestBridge {
                     msg = errJson.optString("message", msg);
                 } catch (Exception ignore) {
                 }
+                checkSessionEnded(code, msg, auth);
                 throw new RestException(code, msg);
             }
             return text;
@@ -14323,6 +14339,7 @@ public class RestBridge {
                     msg = errJson.optString("message", msg);
                 } catch (Exception ignore) {
                 }
+                checkSessionEnded(code, msg, true);
                 throw new RestException(code, msg);
             }
             if (ownSend) rememberOwnSent(text);
