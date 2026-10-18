@@ -7959,7 +7959,7 @@ public class RestBridge {
         StringBuilder hex = new StringBuilder();
         for (byte b : bb.array()) hex.append(String.format(Locale.US, "%02x", b));
         String h = hex.toString();
-        return SITE + "/uploads/secret/" + h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20) + ".enc";
+        return ApiHost.base() + "/uploads/secret/" + h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20) + ".enc";
     }
 
     private boolean handleSecretChatRequest(TLObject request, RequestDelegate onComplete) {
