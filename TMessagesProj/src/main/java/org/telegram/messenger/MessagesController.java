@@ -7647,6 +7647,9 @@ public class MessagesController extends BaseController implements NotificationCe
                 loadingChannelAdmins.delete(chatId);
                 loadChannelAdmins(chatId, false);
                 getNotificationCenter().postNotificationName(NotificationCenter.didLoadChatAdmins, chatId);
+            } else {
+                // 7eve9chat: the fresh list from the server must redraw the open chat too (tags of admins/owner were missing until reopened)
+                getNotificationCenter().postNotificationName(NotificationCenter.didLoadChatAdmins, chatId);
             }
         });
     }

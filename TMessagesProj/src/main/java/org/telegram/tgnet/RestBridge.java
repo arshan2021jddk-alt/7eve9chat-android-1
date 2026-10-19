@@ -1438,6 +1438,35 @@ public class RestBridge {
                 handleReadParticipants((TLRPC.TL_messages_getMessageReadParticipants) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_messages_getOutboxReadDate) {
+                // private chat, tap on a message: "Seen 14:32" (the time the other person read it)
+                final TLRPC.TL_messages_getOutboxReadDate rd = (TLRPC.TL_messages_getOutboxReadDate) request;
+                executor.execute(() -> {
+                    try {
+                        String mongoId = messageMongoIdByTlId.get(rd.msg_id);
+                        if (mongoId == null) {
+                            complete(onComplete, null, tlError(400, "USER_PRIVACY_RESTRICTED"));
+                            return;
+                        }
+                        JSONObject resp = request("GET", "/messages/" + mongoId + "/read-date", null, true);
+                        String at = resp.optString("readAt", "");
+                        if (at.isEmpty() || "null".equals(at)) {
+                            // read before the server kept the time: the app shows its plain "Seen"
+                            complete(onComplete, null, tlError(400, "USER_PRIVACY_RESTRICTED"));
+                            return;
+                        }
+                        TLRPC.TL_outboxReadDate out = new TLRPC.TL_outboxReadDate();
+                        out.date = parseIsoToEpochSeconds(at);
+                        complete(onComplete, out, null);
+                    } catch (RestException e) {
+                        complete(onComplete, null, tlError(400, "USER_PRIVACY_RESTRICTED"));
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                        complete(onComplete, null, genericError(e));
+                    }
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_getMessageReactionsList) {
                 handleReactionsList((TLRPC.TL_messages_getMessageReactionsList) request, onComplete);
                 return true;

@@ -2931,6 +2931,7 @@ public class ChatActivity extends BaseFragment implements
             .add(NotificationCenter.messageReceivedByAck)
             .add(NotificationCenter.messageSendError)
             .add(NotificationCenter.chatInfoDidLoad)
+            .add(NotificationCenter.didLoadChatAdmins)
             .add(NotificationCenter.groupRestrictionsUnlockedByBoosts)
             .add(NotificationCenter.customStickerCreated)
             .add(NotificationCenter.contactsDidLoad)
@@ -22560,6 +22561,11 @@ public class ChatActivity extends BaseFragment implements
                 String subTitle = LocaleController.getString(R.string.BoostingRemoveRestrictionsSuccessSubTitle);
                 BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.raw.chats_infotip, title, subTitle).show();
             }, 350);
+        } else if (id == NotificationCenter.didLoadChatAdmins) {
+            // 7eve9chat: the admin / owner tags next to names were only drawn when the chat was opened again after the list arrived
+            if (currentChat != null && args.length > 0 && args[0] instanceof Long && (Long) args[0] == currentChat.id) {
+                updateVisibleRows();
+            }
         } else if (id == NotificationCenter.chatInfoDidLoad) {
             TLRPC.ChatFull chatFull = (TLRPC.ChatFull) args[0];
             if (currentChat != null && chatFull.id == currentChat.id) {
