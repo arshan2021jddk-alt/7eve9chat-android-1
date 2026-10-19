@@ -10980,6 +10980,8 @@ public class RestBridge {
                 TLRPC.TL_contacts_topPeers result = new TLRPC.TL_contacts_topPeers();
                 if (req.correspondents) result.categories.add(topCategory(resp.optJSONArray("users"), new TLRPC.TL_topPeerCategoryCorrespondents(), result.users));
                 if (req.bots_pm) result.categories.add(topCategory(resp.optJSONArray("bots"), new TLRPC.TL_topPeerCategoryBotsPM(), result.users));
+                // "@" in a chat suggests the inline bots (the ones you use, most used first, then the official ones)
+                if (req.bots_inline) result.categories.add(topCategory(resp.optJSONArray("inlineBots"), new TLRPC.TL_topPeerCategoryBotsInline(), result.users));
                 savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, result, null);
             } catch (Exception e) {
