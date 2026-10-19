@@ -1200,6 +1200,39 @@ public class RestBridge {
                 });
                 return true;
             }
+            if (request instanceof TL_account.registerDevice) {
+                // push: the Firebase token goes to our server, which sends the notification when the app is closed
+                final TL_account.registerDevice reg = (TL_account.registerDevice) request;
+                executor.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        body.put("token", reg.token);
+                        body.put("deviceId", android.provider.Settings.Secure.getString(
+                                ApplicationLoader.applicationContext.getContentResolver(),
+                                android.provider.Settings.Secure.ANDROID_ID));
+                        request("POST", "/push/register", body, true);
+                        complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                        complete(onComplete, null, tlError(500, "PUSH_REGISTER_FAILED"));
+                    }
+                });
+                return true;
+            }
+            if (request instanceof TL_account.unregisterDevice) {
+                final TL_account.unregisterDevice unreg = (TL_account.unregisterDevice) request;
+                executor.execute(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        body.put("token", unreg.token);
+                        request("POST", "/push/unregister", body, true);
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_messages_getFeaturedStickers) {
                 complete(onComplete, new TLRPC.TL_messages_featuredStickers(), null);
                 return true;

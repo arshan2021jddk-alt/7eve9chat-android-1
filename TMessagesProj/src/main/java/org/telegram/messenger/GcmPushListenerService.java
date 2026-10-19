@@ -27,6 +27,11 @@ public class GcmPushListenerService extends FirebaseMessagingService {
             FileLog.d("FCM received data: " + data + " from: " + from);
         }
 
+        if ("1".equals(data.get("seven9"))) {
+            // 7eve9Chat's own server sends a plain notification (title, body, chat); Telegram's encrypted payloads are not used
+            SevenNinePush.show(ApplicationLoader.applicationContext, data);
+            return;
+        }
         PushListenerController.processRemoteMessage(PushListenerController.PUSH_TYPE_FIREBASE, data.get("p"), time);
     }
 
