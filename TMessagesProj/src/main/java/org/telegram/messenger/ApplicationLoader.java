@@ -366,7 +366,8 @@ public class ApplicationLoader extends Application {
             // Someone who set "keep alive" by hand keeps what they chose.
             SharedPreferences main = MessagesController.getMainSettings(UserConfig.selectedAccount);
             boolean pushReady = UserConfig.getInstance(UserConfig.selectedAccount).registeredForPush
-                    && SharedConfig.pushString != null && !SharedConfig.pushString.isEmpty();
+                    && SharedConfig.pushString != null && !SharedConfig.pushString.isEmpty()
+                    && applicationContext.getSharedPreferences("seven9push", 0).getBoolean("works", false);
             enabled = main.contains("keepAliveService") ? main.getBoolean("keepAliveService", true) : !pushReady;
         }
         if (enabled) {

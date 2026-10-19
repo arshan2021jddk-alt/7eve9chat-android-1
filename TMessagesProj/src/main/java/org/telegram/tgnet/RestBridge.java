@@ -1210,7 +1210,10 @@ public class RestBridge {
                         body.put("deviceId", android.provider.Settings.Secure.getString(
                                 ApplicationLoader.applicationContext.getContentResolver(),
                                 android.provider.Settings.Secure.ANDROID_ID));
-                        request("POST", "/push/register", body, true);
+                        JSONObject pushResp = request("POST", "/push/register", body, true);
+                        // the server says whether it can really deliver a push: only then may the app stop its background connection
+                        ApplicationLoader.applicationContext.getSharedPreferences("seven9push", 0).edit()
+                                .putBoolean("works", pushResp.optBoolean("works", false)).apply();
                         complete(onComplete, new TLRPC.TL_boolTrue(), null);
                     } catch (Exception e) {
                         FileLog.e(e);
