@@ -361,9 +361,13 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            // 7eve9chat: no FCM for this backend - the background connection is what brings new
-            // messages while the app is closed, so it is on unless the user turned it off
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", true);
+            // 7eve9chat: the background connection (it costs battery) is only the fallback for phones without push:
+            // once the Firebase token is registered with our server, pushes bring new messages, so it stays off.
+            // Someone who set "keep alive" by hand keeps what they chose.
+            SharedPreferences main = MessagesController.getMainSettings(UserConfig.selectedAccount);
+            boolean pushReady = UserConfig.getInstance(UserConfig.selectedAccount).registeredForPush
+                    && SharedConfig.pushString != null && !SharedConfig.pushString.isEmpty();
+            enabled = main.contains("keepAliveService") ? main.getBoolean("keepAliveService", true) : !pushReady;
         }
         if (enabled) {
             try {

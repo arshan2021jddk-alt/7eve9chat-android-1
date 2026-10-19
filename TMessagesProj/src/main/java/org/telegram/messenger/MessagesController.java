@@ -16242,6 +16242,9 @@ public class MessagesController extends BaseController implements NotificationCe
                 SharedConfig.pushString = regid;
                 SharedConfig.pushType = pushType;
                 getUserConfig().saveConfig(false);
+                // 7eve9chat: Firebase now brings new messages while the app is closed, so the always-running background
+                // connection (battery) is not needed any more unless the user chose to keep it
+                AndroidUtilities.runOnUIThread(ApplicationLoader::startPushService);
             }
             AndroidUtilities.runOnUIThread(() -> registeringForPush = false);
         });
