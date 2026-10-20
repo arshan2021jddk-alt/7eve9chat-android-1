@@ -345,6 +345,17 @@ public class RestBridge {
         return result;
     }
 
+    // Who reacted is shown (avatars) in private chats and groups, never in a broadcast channel (as in Telegram)
+    void applyReactorPrivacy(TLRPC.TL_messageReactions r, TLRPC.Peer peer) {
+        if (r == null || peer == null) return;
+        boolean broadcast = peer.channel_id != 0 && broadcastTlIds.contains(peer.channel_id);
+        r.can_see_list = peer.channel_id != 0 && !broadcast;
+        if (broadcast) {
+            r.recent_reactions = new ArrayList<>();
+            r.flags &= ~TLObject.FLAG_1;
+        }
+    }
+
     // [{user, emoji}] -> grouped counts, marking my own one as chosen.
     TLRPC.TL_messageReactions buildMessageReactions(JSONArray reactions) {
         if (reactions == null || reactions.length() == 0) {
@@ -367,7 +378,34 @@ public class RestBridge {
             return null;
         }
         TLRPC.TL_messageReactions result = new TLRPC.TL_messageReactions();
-        result.can_see_list = false;
+        result.can_see_list = true;
+        // who reacted: the bubble shows their avatars next to the reaction (a private chat: the two people; a group: up to 3 in
+        // total, above that the number) - it needs the list of reactors, not only the counts
+        result.recent_reactions = new ArrayList<>();
+        result.flags |= TLObject.FLAG_1;
+        for (int i = 0; i < reactions.length(); i++) {
+            JSONObject r = reactions.optJSONObject(i);
+            if (r == null) continue;
+            String emoji = r.optString("emoji", "");
+            String uid = refId(r, "user");
+            if (emoji.isEmpty() || uid == null || uid.isEmpty()) continue;
+            TLRPC.TL_messagePeerReaction pr = new TLRPC.TL_messagePeerReaction();
+            TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+            peer.user_id = idFromMongoId(uid);
+            userMongoIdByTlId.put(peer.user_id, uid);
+            pr.peer_id = peer;
+            pr.date = parseIsoToEpochSeconds(r.optString("date", null));
+            if (emoji.startsWith("custom:/uploads/")) {
+                TLRPC.TL_reactionCustomEmoji ce = new TLRPC.TL_reactionCustomEmoji();
+                ce.document_id = idForUrl(absoluteUrl(emoji.substring("custom:".length())));
+                pr.reaction = ce;
+            } else {
+                TLRPC.TL_reactionEmoji re = new TLRPC.TL_reactionEmoji();
+                re.emoticon = emoji;
+                pr.reaction = re;
+            }
+            result.recent_reactions.add(pr);
+        }
         for (Map.Entry<String, Integer> e : counts.entrySet()) {
             TLRPC.TL_reactionCount count = new TLRPC.TL_reactionCount();
             if (e.getKey().startsWith("custom:/uploads/")) {
@@ -400,6 +438,7 @@ public class RestBridge {
         update.msg_id = msgId;
         TLRPC.TL_messageReactions built = buildMessageReactions(reactions);
         update.reactions = built != null ? built : new TLRPC.TL_messageReactions();
+        applyReactorPrivacy(update.reactions, peer);
         return update;
     }
 
@@ -3703,7 +3742,7 @@ public class RestBridge {
                         rememberMyReaction(m.getString("_id"), m.optJSONArray("reactions"));
                         TLRPC.TL_messageReactions reactions = buildMessageReactions(m.optJSONArray("reactions"));
                         if (reactions == null) reactions = new TLRPC.TL_messageReactions();
-                        reactions.can_see_list = peer.channel_id != 0 && !broadcastTlIds.contains(peer.channel_id);
+                        applyReactorPrivacy(reactions, peer);
                         TL_update.TL_updateMessageReactions u = new TL_update.TL_updateMessageReactions();
                         u.peer = peer;
                         u.msg_id = idFromMongoIdInt32(m.getString("_id"));
@@ -12669,7 +12708,7 @@ public class RestBridge {
         TLRPC.TL_messageReactions reactions = buildMessageReactions(m.optJSONArray("reactions"));
         if (reactions != null) {
             // "Who reacted" list: groups yes, channels and private chats no (as in Telegram)
-            reactions.can_see_list = peer.channel_id != 0 && !broadcastTlIds.contains(peer.channel_id);
+            applyReactorPrivacy(reactions, peer);
             msg.reactions = reactions;
             msg.flags |= TLObject.FLAG_20;
         }
