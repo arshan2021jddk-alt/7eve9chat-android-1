@@ -1261,6 +1261,12 @@ public class ReactionsLayoutInBubble {
             }
             if (drawImage && (paid || realCount > 1 || !isPlaying() || !isSelected)) {
                 ImageReceiver imageReceiver2 = getImageReceiver();
+                // 7eve9chat: the secondary receiver draws the reaction's server animation at twice the size (Telegram's Lottie icons have
+                // padding). Ours have none, so it came out twice too big and stuck out of the chip: the app's own emoji is enough.
+                if (imageReceiver2 != null && visibleReaction != null && visibleReaction.emojicon != null && org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon) != null) {
+                    removeImageReceiver();
+                    imageReceiver2 = null;
+                }
                 boolean drawStaticImage = true;
                 if (imageReceiver2 != null) {
                     if (imageReceiver2.getLottieAnimation() != null && imageReceiver2.getLottieAnimation().hasBitmap()) {
