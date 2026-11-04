@@ -364,21 +364,23 @@ public class ReactionsLayoutInBubble {
                     button.width += button.counterDrawable.getCurrentWidth() + dp(8);
                 }
             } else {
-                button.width = (int) (dp(8) + dp(20) + dp(button.animatedEmojiDrawable != null ? 6 : 4));
+                // 7eve9chat: the chips on a message came out about twice too big - halved
+                // (emoji slot, paddings, avatars, height); the emoji draw matches in draw()
+                button.width = (int) (dp(4) + dp(10) + dp(button.animatedEmojiDrawable != null ? 3 : 2));
                 if (button.avatarsDrawable != null && button.users.size() > 0) {
                     button.users.size();
                     int c1 = 1;
                     int c2 = button.users.size() > 1 ? button.users.size() - 1 : 0;
-                    button.width += dp(2) + c1 * dp(20) + c2 * dp(20) * 0.8f + dp(1);
-                    button.avatarsDrawable.height = dp(26);
+                    button.width += dp(1) + c1 * dp(10) + c2 * dp(10) * 0.8f + dp(1);
+                    button.avatarsDrawable.height = dp(13);
                 } else if (button.hasName) {
-                    button.width += button.textDrawable.getAnimateToWidth() + dp(8);
+                    button.width += button.textDrawable.getAnimateToWidth() + dp(4);
                 } else if (button.counterDrawable.getCurrentWidth() > 0) {
-                    button.width += button.counterDrawable.getCurrentWidth() + dp(8);
+                    button.width += button.counterDrawable.getCurrentWidth() + dp(4);
                 } else {
                     button.width -= dp(1);
                 }
-                button.height = dp(26);
+                button.height = dp(13);
             }
 
             if (currentX + button.width > availableWidth) {
@@ -426,7 +428,7 @@ public class ReactionsLayoutInBubble {
         } else {
             width = maxWidth;
         }
-        height = currentY + (reactionButtons.size() == 0 ? 0 : dp(26));
+        height = currentY + (reactionButtons.size() == 0 ? 0 : dp(13));
         drawServiceShaderBackground = 0f;
     }
 
@@ -872,14 +874,14 @@ public class ReactionsLayoutInBubble {
                 textDrawable = new AnimatedTextView.AnimatedTextDrawable(true, true, true);
                 textDrawable.ignoreRTL = true;
                 textDrawable.setAnimationProperties(.4f, 0, 320, CubicBezierInterpolator.EASE_OUT_QUINT);
-                textDrawable.setTextSize(dp(13));
+                textDrawable.setTextSize(dp(isTag ? 13 : 7)); // 7eve9chat: halved for the on-message chips (tags stay)
                 textDrawable.setCallback(supercallback);
                 textDrawable.setTypeface(AndroidUtilities.bold());
                 textDrawable.setOverrideFullWidth(AndroidUtilities.displaySize.x);
             }
             if (scrimPreviewCounterDrawable == null) {
                 scrimPreviewCounterDrawable = new AnimatedTextView.AnimatedTextDrawable(false, false, false, true);
-                scrimPreviewCounterDrawable.setTextSize(dp(12));
+                scrimPreviewCounterDrawable.setTextSize(dp(isTag ? 12 : 6)); // 7eve9chat: halved for the on-message chips (tags stay)
                 scrimPreviewCounterDrawable.setCallback(supercallback);
                 scrimPreviewCounterDrawable.setTypeface(AndroidUtilities.bold());
                 scrimPreviewCounterDrawable.setOverrideFullWidth(AndroidUtilities.displaySize.x);
@@ -1102,7 +1104,7 @@ public class ReactionsLayoutInBubble {
             boolean restore = false;
             int w = width;
             if (scrimProgress > 0 && !isTag && scrimPreviewCounterDrawable != null && avatarsDrawable == null) {
-                w = (int) (dp(8) + dp(20) + dp(animatedEmojiDrawable != null ? 6 : 4) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(8));
+                w = (int) (dp(4) + dp(10) + dp(animatedEmojiDrawable != null ? 3 : 2) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(4)); // 7eve9chat: halved
                 scrimPreviewCounterDrawable.setTextColor(lastDrawnTextColor);
             } else if (progress != 1f && animationType == ANIMATION_TYPE_MOVE) {
                 w = (int) (width * progress + animateFromWidth * (1f - progress));
@@ -1159,18 +1161,18 @@ public class ReactionsLayoutInBubble {
             if (imageReceiver != null) {
                 int size, X;
                 if (paid) {
-                    size = dp(22);
-                    X = dp(4);
+                    size = dp(11); // 7eve9chat: halved
+                    X = dp(2);
                 } else if (animatedEmojiDrawable != null) {
-                    size = dp(24);
-                    X = dp(6);
-                    imageReceiver.setRoundRadius(dp(6));
+                    size = dp(12); // 7eve9chat: halved
+                    X = dp(3);
+                    imageReceiver.setRoundRadius(dp(3));
                 } else {
-                    // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding),
-                    // so 16dp looks like Telegram's 20dp; centred where the 20dp icon was
+                    // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding);
+                    // halved with the chip: 8dp where the 10dp slot was
                     final boolean ownEmoji = visibleReaction != null && visibleReaction.emojicon != null && !visibleReaction.isStar;
-                    size = ownEmoji ? dp(16) : dp(20);
-                    X = ownEmoji ? dp(10) : dp(8);
+                    size = ownEmoji ? dp(8) : dp(10);
+                    X = ownEmoji ? dp(5) : dp(4);
                     imageReceiver.setRoundRadius(0);
                 }
                 int Y = (int) ((height - size) / 2f);
@@ -1182,9 +1184,12 @@ public class ReactionsLayoutInBubble {
             }
 
             float tx = 0;
+            // 7eve9chat: tags keep the old metrics, the on-message chips are halved (see measure())
+            final int inset = isTag ? (hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) : (hasName && !drawTagDot() ? 5 : 4);
+            final int slot = isTag ? 20 : 10;
             if (textDrawable != null && textDrawable.isNotEmpty() > 0) {
                 canvas.save();
-                canvas.translate(x + dp(hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) + dp(20) + dp(2), y);
+                canvas.translate(x + dp(inset) + dp(slot) + dp(isTag ? 2 : 1), y);
                 textDrawable.setBounds(0, 0, width, height);
                 textDrawable.draw(canvas);
                 textDrawable.setAlpha((int) (0xFF * alpha));
@@ -1193,14 +1198,14 @@ public class ReactionsLayoutInBubble {
             }
             if (scrimProgress > 0.0f && !isTag && scrimPreviewCounterDrawable != null && avatarsDrawable == null) {
                 canvas.save();
-                canvas.translate(x + dp(hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) + dp(20) + dp(animatedEmojiDrawable != null ? 5 : 2), y - dp(1));
+                canvas.translate(x + dp(inset) + dp(slot) + dp(isTag ? (animatedEmojiDrawable != null ? 5 : 2) : (animatedEmojiDrawable != null ? 3 : 1)), y - dp(1));
                 scrimPreviewCounterDrawable.setBounds(0, 0, width, height);
                 scrimPreviewCounterDrawable.draw(canvas);
                 scrimPreviewCounterDrawable.setAlpha((int) (0xFF * alpha));
                 canvas.restore();
             } else if (counterDrawable != null && drawCounter()) {
                 canvas.save();
-                canvas.translate(x + dp(hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) + dp(20) + dp(animatedEmojiDrawable != null ? 5 : 2) + tx + (paid ? -dp(1) : 0), y);
+                canvas.translate(x + dp(inset) + dp(slot) + dp(isTag ? (animatedEmojiDrawable != null ? 5 : 2) : (animatedEmojiDrawable != null ? 3 : 1)) + tx + (paid ? -dp(1) : 0), y);
                 counterDrawable.draw(canvas);
                 canvas.restore();
             }
@@ -1208,7 +1213,7 @@ public class ReactionsLayoutInBubble {
             if (!isTag) {
                 if (avatarsDrawable != null) {
                     canvas.save();
-                    canvas.translate(x + dp(10) + dp(20) + dp(2), y);
+                    canvas.translate(x + dp(5) + dp(10) + dp(1), y); // 7eve9chat: halved
                     avatarsDrawable.setAlpha(alpha);
                     avatarsDrawable.setTransitionProgress(progress);
                     avatarsDrawable.onDraw(canvas);
@@ -1313,10 +1318,10 @@ public class ReactionsLayoutInBubble {
                     avatarsDrawable = new AvatarsDrawable(parentView, false);
                     avatarsDrawable.transitionDuration = ChatListItemAnimator.DEFAULT_DURATION;
                     avatarsDrawable.transitionInterpolator = ChatListItemAnimator.DEFAULT_INTERPOLATOR;
-                    avatarsDrawable.setSize(dp(20));
+                    avatarsDrawable.setSize(dp(10)); // 7eve9chat: halved for the on-message chips
                     avatarsDrawable.width = dp(100);
                     avatarsDrawable.height = height;
-                    avatarsDrawable.setAvatarsTextSize(dp(22));
+                    avatarsDrawable.setAvatarsTextSize(dp(11)); // 7eve9chat: halved
                 }
                 if (attached) {
                     avatarsDrawable.onAttachedToWindow();
