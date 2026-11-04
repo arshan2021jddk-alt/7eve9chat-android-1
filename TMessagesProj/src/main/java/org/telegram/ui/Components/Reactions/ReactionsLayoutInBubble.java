@@ -1321,7 +1321,7 @@ public class ReactionsLayoutInBubble {
                     avatarsDrawable.setSize(dp(10)); // 7eve9chat: halved for the on-message chips
                     avatarsDrawable.width = dp(100);
                     avatarsDrawable.height = height;
-                    avatarsDrawable.setAvatarsTextSize(dp(11)); // 7eve9chat: halved
+                    avatarsDrawable.setAvatarsTextSize(dp(9)); // 7eve9chat: halved (fits inside the 10dp avatars)
                 }
                 if (attached) {
                     avatarsDrawable.onAttachedToWindow();
@@ -1414,19 +1414,16 @@ public class ReactionsLayoutInBubble {
                 if (visibleReaction.isStar) {
 
                 } else if (visibleReaction.emojicon != null) {
-                    TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(visibleReaction.emojicon);
-                    if (r != null && r.activate_animation != null) {
-                        //imageReceiver.setImage(ImageLocation.getForDocument(r.static_icon), "40_40", svgThumb, "webp", r, 1);
-                        SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(r.static_icon, Theme.key_windowBackgroundGray, 1.0f);
+                    // 7eve9chat: the tap preview draws the app's own emoji right away. The old path loaded
+                    // the reaction's server animation (.tgs), which on a slow link stalls for seconds while
+                    // drawPreview() keeps invalidating every frame - the chat froze ("hung") on tapping a
+                    // reaction. No network from here on.
+                    android.graphics.drawable.Drawable big = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
+                    if (big != null) {
                         previewImageReceiver = new ImageReceiver(parent);
                         previewImageReceiver.setLayerNum(7);
                         previewImageReceiver.onAttachedToWindow();
-                        previewImageReceiver.setRoundRadius(dp(14));
-                        previewImageReceiver.setAllowStartLottieAnimation(true);
-                        previewImageReceiver.setAllowStartAnimation(true);
-                        previewImageReceiver.setAutoRepeat(1);
-                        previewImageReceiver.setAllowDecodeSingleFrame(true);
-                        previewImageReceiver.setImage(ImageLocation.getForDocument(r.activate_animation), "140_140", svgThumb, null, r, 1);
+                        previewImageReceiver.setImageBitmap(big);
                     }
                 } else if (visibleReaction.documentId != 0) {
                     previewAnimatedEmojiDrawable = new AnimatedEmojiDrawable(AnimatedEmojiDrawable.CACHE_TYPE_ALERT_PREVIEW_LARGE_140, currentAccount, visibleReaction.documentId);

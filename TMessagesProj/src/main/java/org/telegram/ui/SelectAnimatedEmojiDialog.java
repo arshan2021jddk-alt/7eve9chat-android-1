@@ -2268,7 +2268,7 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 if (type == TYPE_STICKER_SET_EMOJI) {
                     imageView.setDrawable(Emoji.getEmojiDrawable(currentReaction.emojicon));
                 } else if (!currentReaction.isEffect && currentReaction.emojicon != null) {
-                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(7), AndroidUtilities.dp(7), AndroidUtilities.dp(7), AndroidUtilities.dp(7)); // 7eve9chat: our emoji fill their frame (Telegram's icons have padding): keep them from touching
+                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
                     if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
@@ -2293,7 +2293,7 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                         imageView.setDrawable(Emoji.getEmojiDrawable(currentReaction.emojicon));
                     }
                 } else {
-                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1));
+                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8)); // 7eve9chat: custom emoji also at half the cell
                     imageView.span = new AnimatedEmojiSpan(currentReaction.documentId, null);
                     imageView.document = null;
                     imageView.imageReceiver.clearImage();
@@ -2659,7 +2659,7 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 imageView.setViewSelected(selectedReactions.contains(currentReaction), false);
                 imageView.notDraw = false;
                 if (!currentReaction.isEffect && currentReaction.emojicon != null) {
-                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(7), AndroidUtilities.dp(7), AndroidUtilities.dp(7), AndroidUtilities.dp(7)); // 7eve9chat: our emoji fill their frame (Telegram's icons have padding): keep them from touching
+                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
                     if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
@@ -2681,7 +2681,7 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                         imageView.premiumLockIconView.setImageReceiver(null);
                     }
                 } else {
-                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1));
+                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8)); // 7eve9chat: custom emoji also at half the cell
                     imageView.span = new AnimatedEmojiSpan(currentReaction.documentId, null);
                     imageView.document = null;
                     imageView.imageReceiver.clearImage();

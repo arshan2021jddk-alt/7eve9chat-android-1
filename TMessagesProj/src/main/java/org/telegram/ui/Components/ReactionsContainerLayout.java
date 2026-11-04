@@ -2690,7 +2690,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     }
 
 
-    // 7eve9chat: an emoji drawn at 3/4 of its bounds, centred (reaction picker)
+    // 7eve9chat: an emoji drawn at half of its bounds, centred (reaction picker)
     private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
         if (d == null) return null;
         return new android.graphics.drawable.Drawable() {
@@ -2699,7 +2699,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
             @Override
             public void draw(@NonNull Canvas canvas) {
                 android.graphics.Rect b = getBounds();
-                int w = b.width() * 3 / 4, h = b.height() * 3 / 4;
+                int w = b.width() / 2, h = b.height() / 2;
                 int l = b.centerX() - w / 2, t = b.centerY() - h / 2;
                 d.setBounds(l, t, l + w, t + h);
                 d.setAlpha(alpha);
