@@ -336,6 +336,53 @@ public class ReactionsLayoutInBubble {
     }
 
     private final ArrayList<Integer> reactionLineWidths = new ArrayList<>();
+    // 7eve9chat: the app's own emoji ignore their bounds when fullSize (SimpleEmojiDrawable draws a
+    // bigImgSize square around the bounds' centre), so a receiver-set emoji rendered at its intrinsic
+    // 34dp no matter the chip size - the emoji overflowed the frame. This wrapper scales the canvas so
+    // the emoji fills exactly the bounds the receiver asks for.
+    private static Drawable boundsEmoji(Drawable d) {
+        if (d == null) {
+            return null;
+        }
+        final int intrinsic = Math.max(1, d.getBounds().width());
+        return new Drawable() {
+            @Override
+            public void draw(@NonNull Canvas canvas) {
+                Rect b = getBounds();
+                if (b.isEmpty()) {
+                    return;
+                }
+                float scale = Math.min(b.width(), b.height()) / (float) intrinsic;
+                canvas.save();
+                canvas.scale(scale, scale, b.centerX(), b.centerY());
+                d.setBounds(b.centerX(), b.centerY(), b.centerX(), b.centerY());
+                d.draw(canvas);
+                canvas.restore();
+            }
+
+            @Override
+            public void setAlpha(int alpha) {
+                d.setAlpha(alpha);
+            }
+
+            @Override
+            public void setColorFilter(android.graphics.ColorFilter colorFilter) {
+                d.setColorFilter(colorFilter);
+            }
+
+            @Override
+            public int getOpacity() {
+                return android.graphics.PixelFormat.TRANSLUCENT;
+            }
+
+            @Override
+            public void setCallback(Callback cb) {
+                super.setCallback(cb);
+                d.setCallback(cb);
+            }
+        };
+    }
+
     public void measure(int availableWidth, int gravity) {
         height = 0;
         width = 0;
@@ -934,7 +981,7 @@ public class ReactionsLayoutInBubble {
                     android.graphics.drawable.Drawable emojiDrawable = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
                     TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(visibleReaction.emojicon);
                     if (emojiDrawable != null) {
-                        imageReceiver.setImageBitmap(emojiDrawable);
+                        imageReceiver.setImageBitmap(boundsEmoji(emojiDrawable)); // 7eve9chat: scaled into the chip's emoji slot
                     } else if (r != null) {
                         //imageReceiver.setImage(ImageLocation.getForDocument(r.static_icon), "40_40", svgThumb, "webp", r, 1);
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(r.static_icon, Theme.key_windowBackgroundGray, 1.0f);
@@ -1423,7 +1470,7 @@ public class ReactionsLayoutInBubble {
                         previewImageReceiver = new ImageReceiver(parent);
                         previewImageReceiver.setLayerNum(7);
                         previewImageReceiver.onAttachedToWindow();
-                        previewImageReceiver.setImageBitmap(big);
+                        previewImageReceiver.setImageBitmap(boundsEmoji(big));
                     }
                 } else if (visibleReaction.documentId != 0) {
                     previewAnimatedEmojiDrawable = new AnimatedEmojiDrawable(AnimatedEmojiDrawable.CACHE_TYPE_ALERT_PREVIEW_LARGE_140, currentAccount, visibleReaction.documentId);
@@ -1647,7 +1694,7 @@ public class ReactionsLayoutInBubble {
             android.graphics.drawable.Drawable emojiDrawable = reaction.emojicon != null ? org.telegram.messenger.Emoji.getEmojiBigDrawable(reaction.emojicon) : null;
             TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(reaction.emojicon);
             if (emojiDrawable != null) {
-                imageReceiver.setImageBitmap(emojiDrawable); // 7eve9chat: the app's own emoji
+                imageReceiver.setImageBitmap(boundsEmoji(emojiDrawable)); // 7eve9chat: the app's own emoji, scaled
             } else if (r != null) {
                 imageReceiver.setImage(ImageLocation.getForDocument(r.center_icon), "40_40_nolimit", null, "tgs", r, 1);
             }

@@ -2690,20 +2690,29 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     }
 
 
-    // 7eve9chat: an emoji drawn at half of its bounds, centred (reaction picker)
+    // 7eve9chat: the app's own emoji ignore their bounds when fullSize (they draw a bigImgSize square
+    // around the centre), so the old setBounds trick changed nothing - the picker emoji were always
+    // 34dp. The wrapper scales the canvas: the emoji renders exactly at half the target bounds,
+    // centred (the user asked for the reactions at half of what they were).
     private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
         if (d == null) return null;
+        final int intrinsic = Math.max(1, d.getBounds().width());
         return new android.graphics.drawable.Drawable() {
             private int alpha = 255;
 
             @Override
             public void draw(@NonNull Canvas canvas) {
                 android.graphics.Rect b = getBounds();
-                int w = b.width() / 2, h = b.height() / 2;
-                int l = b.centerX() - w / 2, t = b.centerY() - h / 2;
-                d.setBounds(l, t, l + w, t + h);
+                if (b.isEmpty()) {
+                    return;
+                }
+                float scale = (Math.min(b.width(), b.height()) / 2f) / intrinsic;
+                canvas.save();
+                canvas.scale(scale, scale, b.centerX(), b.centerY());
+                d.setBounds(b.centerX(), b.centerY(), b.centerX(), b.centerY());
                 d.setAlpha(alpha);
                 d.draw(canvas);
+                canvas.restore();
             }
 
             @Override
@@ -2723,12 +2732,12 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 
             @Override
             public int getIntrinsicWidth() {
-                return d.getIntrinsicWidth();
+                return d.getIntrinsicWidth() / 2;
             }
 
             @Override
             public int getIntrinsicHeight() {
-                return d.getIntrinsicHeight();
+                return d.getIntrinsicHeight() / 2;
             }
         };
     }
