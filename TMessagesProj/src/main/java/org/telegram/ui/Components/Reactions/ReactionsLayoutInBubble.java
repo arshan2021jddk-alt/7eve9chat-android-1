@@ -374,12 +374,6 @@ public class ReactionsLayoutInBubble {
             public int getOpacity() {
                 return android.graphics.PixelFormat.TRANSLUCENT;
             }
-
-            @Override
-            public void setCallback(Callback cb) {
-                super.setCallback(cb);
-                d.setCallback(cb);
-            }
         };
     }
 
