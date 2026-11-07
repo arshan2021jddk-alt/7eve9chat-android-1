@@ -2270,7 +2270,12 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 } else if (!currentReaction.isEffect && currentReaction.emojicon != null) {
                     imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
-                    if (reaction != null) {
+                    final Drawable localEmoji = type == TYPE_REACTIONS || type == TYPE_EXPANDABLE_REACTIONS
+                            ? Emoji.getEmojiDrawable(currentReaction.emojicon) : null;
+                    if (localEmoji != null) {
+                        imageView.imageReceiver.setImageBitmap(localEmoji);
+                        imageView.preloadEffectImageReceiver.clearImage();
+                    } else if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
                         if (!LiteMode.isEnabled(LiteMode.FLAG_ANIMATED_EMOJI_REACTIONS)) {
                             imageView.imageReceiver.setImage(ImageLocation.getForDocument(reaction.select_animation), "60_60_firstframe", null, null, svgThumb, 0, "tgs", currentReaction, 0);
@@ -2661,7 +2666,12 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 if (!currentReaction.isEffect && currentReaction.emojicon != null) {
                     imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
-                    if (reaction != null) {
+                    final Drawable localEmoji = type == TYPE_REACTIONS || type == TYPE_EXPANDABLE_REACTIONS
+                            ? Emoji.getEmojiDrawable(currentReaction.emojicon) : null;
+                    if (localEmoji != null) {
+                        imageView.imageReceiver.setImageBitmap(localEmoji);
+                        imageView.preloadEffectImageReceiver.clearImage();
+                    } else if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
                         if (!LiteMode.isEnabled(LiteMode.FLAG_ANIMATED_EMOJI_REACTIONS)) {
                             imageView.imageReceiver.setImage(ImageLocation.getForDocument(reaction.select_animation), "60_60_firstframe", null, null, svgThumb, 0, "tgs", currentReaction, 0);

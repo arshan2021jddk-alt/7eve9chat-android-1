@@ -2106,9 +2106,9 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
             } else if (currentReaction.emojicon != null && Emoji.getEmojiDrawable(currentReaction.emojicon) != null) {
-                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon)));
-                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon)));
-                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon)));
+                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
+                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
+                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
                 if (lockIconView != null) {
                     lockIconView.setImageReceiver(loopImageView.getImageReceiver());
                 }
@@ -2688,7 +2688,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     }
 
 
-    private static android.graphics.drawable.Drawable smallerEmoji(Emoji.EmojiDrawable d) {
+    private static android.graphics.drawable.Drawable smallerEmoji(Emoji.EmojiDrawable d, float fraction) {
         return new android.graphics.drawable.Drawable() {
             private int alpha = 255;
 
@@ -2699,7 +2699,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
                     return;
                 }
                 // Leave space around the corners of the emoji inside the selection circle.
-                final int size = Math.round(Math.min(b.width(), b.height()) * .65f);
+                final int size = Math.round(Math.min(b.width(), b.height()) * fraction);
                 final int left = b.left + (b.width() - size) / 2;
                 final int top = b.top + (b.height() - size) / 2;
                 d.setBounds(left, top, left + size, top + size);
