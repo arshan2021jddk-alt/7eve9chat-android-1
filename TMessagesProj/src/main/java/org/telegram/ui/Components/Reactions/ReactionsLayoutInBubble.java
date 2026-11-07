@@ -340,7 +340,7 @@ public class ReactionsLayoutInBubble {
     // bigImgSize square around the bounds' centre), so a receiver-set emoji rendered at its intrinsic
     // 34dp no matter the chip size - the emoji overflowed the frame. This wrapper scales the canvas so
     // the emoji fills exactly the bounds the receiver asks for.
-    private static Drawable boundsEmoji(Drawable d) {
+    static Drawable boundsEmoji(Drawable d) {
         if (d == null) {
             return null;
         }

@@ -7,10 +7,12 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 import android.view.View;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.DocumentObject;
+import org.telegram.messenger.Emoji;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.ImageReceiver;
@@ -37,6 +39,7 @@ public class ReactionImageHolder {
     private boolean attached;
     float alpha = 1f;
     private boolean isStatic;
+    private Emoji.EmojiDrawable localEmoji;
     int lastColorForFilter;
     ColorFilter colorFilter;
 
@@ -57,11 +60,17 @@ public class ReactionImageHolder {
         }
 
         this.currentReaction = currentReaction;
+        localEmoji = null;
         String filter = "60_60";
         if (isStatic) {
             filter += "_firstframe";
         }
         if (currentReaction.emojicon != null) {
+            localEmoji = getLocalEmoji(currentReaction.emojicon);
+            if (localEmoji != null) {
+                imageReceiver.setImageBitmap(ReactionsLayoutInBubble.boundsEmoji(localEmoji));
+                return;
+            }
             TLRPC.TL_availableReaction defaultReaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
             if (defaultReaction != null) {
                 SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(defaultReaction.select_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
@@ -82,9 +91,19 @@ public class ReactionImageHolder {
         }
     }
 
+    private static Emoji.EmojiDrawable getLocalEmoji(String emoticon) {
+        Drawable drawable = Emoji.getEmojiBigDrawable(emoticon);
+        return drawable instanceof Emoji.EmojiDrawable ? (Emoji.EmojiDrawable) drawable : null;
+    }
+
     public static void preload(int currentAccount, ReactionsLayoutInBubble.VisibleReaction reaction) {
         if (reaction == null) return;
         if (reaction.emojicon != null) {
+            Emoji.EmojiDrawable emoji = getLocalEmoji(reaction.emojicon);
+            if (emoji != null) {
+                emoji.preload();
+                return;
+            }
             TLRPC.TL_availableReaction defaultReaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(reaction.emojicon);
             if (defaultReaction != null) {
                 FileLoader.getInstance(currentAccount).loadFile(defaultReaction.select_animation, reaction, FileLoader.PRIORITY_LOW, 0);
@@ -111,6 +130,9 @@ public class ReactionImageHolder {
     }
 
     public boolean isLoaded() {
+        if (localEmoji != null) {
+            return localEmoji.isLoaded();
+        }
         ImageReceiver imageReceiver;
         if (animatedEmojiDrawable != null) {
             imageReceiver = animatedEmojiDrawable.getImageReceiver();
