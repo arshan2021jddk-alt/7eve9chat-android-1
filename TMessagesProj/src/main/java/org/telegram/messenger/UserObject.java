@@ -58,7 +58,7 @@ public class UserObject {
             return LocaleController.getString(R.string.HiddenName);
         }
         String name = AndroidUtilities.removeRTL(AndroidUtilities.removeDiacritics(ContactsController.formatName(user.first_name, user.last_name)));
-        return name.length() != 0 || TextUtils.isEmpty(user.phone) ? name : PhoneFormat.getInstance().format("+" + user.phone);
+        return !TextUtils.isEmpty(name) ? name : LocaleController.getString(R.string.HiddenName);
     }
 
     public static String getPublicUsername(TLRPC.User user, boolean editable) {
