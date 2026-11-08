@@ -405,15 +405,14 @@ public class ReactionsLayoutInBubble {
                     button.width += button.counterDrawable.getCurrentWidth() + dp(8);
                 }
             } else {
-                // 7eve9chat: the chips on a message came out about twice too big - halved
-                // (emoji slot, paddings, avatars, height); the emoji draw matches in draw()
-                button.width = (int) (dp(4) + dp(10) + dp(button.animatedEmojiDrawable != null ? 3 : 2));
+                // Keep the message chip large enough for the doubled reaction artwork.
+                button.width = (int) (dp(4) + dp(24) + dp(button.animatedEmojiDrawable != null ? 3 : 2));
                 if (button.avatarsDrawable != null && button.users.size() > 0) {
                     button.users.size();
                     int c1 = 1;
                     int c2 = button.users.size() > 1 ? button.users.size() - 1 : 0;
                     button.width += dp(1) + c1 * dp(10) + c2 * dp(10) * 0.8f + dp(1);
-                    button.avatarsDrawable.height = dp(13);
+                    button.avatarsDrawable.height = dp(28);
                 } else if (button.hasName) {
                     button.width += button.textDrawable.getAnimateToWidth() + dp(4);
                 } else if (button.counterDrawable.getCurrentWidth() > 0) {
@@ -421,7 +420,7 @@ public class ReactionsLayoutInBubble {
                 } else {
                     button.width -= dp(1);
                 }
-                button.height = dp(13);
+                button.height = dp(28);
             }
 
             if (currentX + button.width > availableWidth) {
@@ -469,7 +468,7 @@ public class ReactionsLayoutInBubble {
         } else {
             width = maxWidth;
         }
-        height = currentY + (reactionButtons.size() == 0 ? 0 : dp(13));
+        height = currentY + (reactionButtons.isEmpty() ? 0 : reactionButtons.get(reactionButtons.size() - 1).height);
         drawServiceShaderBackground = 0f;
     }
 
@@ -1145,7 +1144,7 @@ public class ReactionsLayoutInBubble {
             boolean restore = false;
             int w = width;
             if (scrimProgress > 0 && !isTag && scrimPreviewCounterDrawable != null && avatarsDrawable == null) {
-                w = (int) (dp(4) + dp(10) + dp(animatedEmojiDrawable != null ? 3 : 2) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(4)); // 7eve9chat: halved
+                w = (int) (dp(4) + dp(24) + dp(animatedEmojiDrawable != null ? 3 : 2) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(4)); // 7eve9chat: halved
                 scrimPreviewCounterDrawable.setTextColor(lastDrawnTextColor);
             } else if (progress != 1f && animationType == ANIMATION_TYPE_MOVE) {
                 w = (int) (width * progress + animateFromWidth * (1f - progress));
@@ -1202,17 +1201,17 @@ public class ReactionsLayoutInBubble {
             if (imageReceiver != null) {
                 int size, X;
                 if (paid) {
-                    size = dp(11); // 7eve9chat: halved
+                    size = dp(isTag ? 11 : 22);
                     X = dp(2);
                 } else if (animatedEmojiDrawable != null) {
-                    size = dp(12); // 7eve9chat: halved
+                    size = dp(isTag ? 12 : 24);
                     X = dp(3);
                     imageReceiver.setRoundRadius(dp(3));
                 } else {
                     // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding);
-                    // halved with the chip: 8dp where the 10dp slot was
+                    // message reaction artwork is twice the previous size.
                     final boolean ownEmoji = visibleReaction != null && visibleReaction.emojicon != null && !visibleReaction.isStar;
-                    size = ownEmoji ? dp(8) : dp(10);
+                    size = dp(isTag ? (ownEmoji ? 8 : 10) : (ownEmoji ? 16 : 20));
                     X = ownEmoji ? dp(5) : dp(4);
                     imageReceiver.setRoundRadius(0);
                 }
@@ -1225,9 +1224,9 @@ public class ReactionsLayoutInBubble {
             }
 
             float tx = 0;
-            // 7eve9chat: tags keep the old metrics, the on-message chips are halved (see measure())
+            // Reserve the same emoji slot used by measure().
             final int inset = isTag ? (hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) : (hasName && !drawTagDot() ? 5 : 4);
-            final int slot = isTag ? 20 : 10;
+            final int slot = isTag ? 20 : 24;
             if (textDrawable != null && textDrawable.isNotEmpty() > 0) {
                 canvas.save();
                 canvas.translate(x + dp(inset) + dp(slot) + dp(isTag ? 2 : 1), y);
@@ -1254,7 +1253,7 @@ public class ReactionsLayoutInBubble {
             if (!isTag) {
                 if (avatarsDrawable != null) {
                     canvas.save();
-                    canvas.translate(x + dp(5) + dp(10) + dp(1), y); // 7eve9chat: halved
+                    canvas.translate(x + dp(5) + dp(24) + dp(1), y);
                     avatarsDrawable.setAlpha(alpha);
                     avatarsDrawable.setTransitionProgress(progress);
                     avatarsDrawable.onDraw(canvas);
