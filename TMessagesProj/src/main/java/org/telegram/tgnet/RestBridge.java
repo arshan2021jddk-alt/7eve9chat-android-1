@@ -6755,7 +6755,10 @@ public class RestBridge {
                     String emoji = o.optString("emoji", "").replace("\uFE0F", "");
                     String url = o.optString("url", "");
                     if (emoji.isEmpty() || !url.startsWith("/uploads/")) continue;
-                    TLRPC.Document doc = buildDocumentMedia(absoluteUrl(url), "application/x-tgsticker", "AnimatedSticker.tgs", "sticker").document;
+                    boolean video = url.endsWith(".webm");
+                    TLRPC.Document doc = buildDocumentMedia(absoluteUrl(url),
+                            video ? "video/webm" : "application/x-tgsticker",
+                            video ? "AnimatedSticker.webm" : "AnimatedSticker.tgs", "sticker").document;
                     for (TLRPC.DocumentAttribute a : doc.attributes) {
                         if (a instanceof TLRPC.TL_documentAttributeSticker) {
                             a.alt = emoji;
