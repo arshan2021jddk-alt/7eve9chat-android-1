@@ -850,6 +850,7 @@ public class ReactionsLayoutInBubble {
         public TLRPC.Reaction reaction;
         VisibleReaction visibleReaction;
         android.graphics.Rect drawingImageRect = new Rect();
+        private long reactionAnimationStarted;
 
         public boolean hasName;
         public String name;
@@ -1341,7 +1342,21 @@ public class ReactionsLayoutInBubble {
                     imageReceiver2.draw(canvas);
                 }
                 if (drawStaticImage) {
-                    imageReceiver.draw(canvas);
+                    if (reactionAnimationStarted != 0 && bounds != null) {
+                        float progress = Math.min(1f, (android.os.SystemClock.uptimeMillis() - reactionAnimationStarted) / 240f);
+                        float scale = 0.68f + 0.32f * CubicBezierInterpolator.EASE_OUT_QUINT.getInterpolation(progress);
+                        canvas.save();
+                        canvas.scale(scale, scale, bounds.exactCenterX(), bounds.exactCenterY());
+                        imageReceiver.draw(canvas);
+                        canvas.restore();
+                        if (progress < 1f) {
+                            parentView.postInvalidateOnAnimation();
+                        } else {
+                            reactionAnimationStarted = 0;
+                        }
+                    } else {
+                        imageReceiver.draw(canvas);
+                    }
                 }
                 lastImageDrawn = true;
             } else {
@@ -1681,6 +1696,15 @@ public class ReactionsLayoutInBubble {
     }
 
     public void animateReaction(VisibleReaction reaction) {
+        if (reaction.emojicon != null && Emoji.getReactionEmojiDrawable(reaction.emojicon) != null) {
+            for (ReactionButton button : reactionButtons) {
+                if (reaction.isSame(button.reaction)) {
+                    button.reactionAnimationStarted = android.os.SystemClock.uptimeMillis();
+                    parentView.invalidate();
+                    return;
+                }
+            }
+        }
         if (reaction.documentId == 0 && animatedReactions.get(reaction) == null) {
             ImageReceiver imageReceiver = new ImageReceiver();
             imageReceiver.setParentView(parentView);
