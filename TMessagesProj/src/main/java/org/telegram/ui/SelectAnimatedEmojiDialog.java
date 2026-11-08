@@ -2268,9 +2268,14 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 if (type == TYPE_STICKER_SET_EMOJI) {
                     imageView.setDrawable(Emoji.getEmojiDrawable(currentReaction.emojicon));
                 } else if (!currentReaction.isEffect && currentReaction.emojicon != null) {
-                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
+                    imageView.isDefaultReaction = true;
+                    imageView.setPadding(dp(4), dp(4), dp(4), dp(4));
+                    Drawable localEmoji = Emoji.getReactionEmojiDrawable(currentReaction.emojicon);
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
-                    if (reaction != null) {
+                    if (localEmoji != null) {
+                        imageView.imageReceiver.setImageBitmap(ReactionsLayoutInBubble.boundsEmoji(localEmoji));
+                        imageView.preloadEffectImageReceiver.clearImage();
+                    } else if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
                         if (!LiteMode.isEnabled(LiteMode.FLAG_ANIMATED_EMOJI_REACTIONS)) {
                             imageView.imageReceiver.setImage(ImageLocation.getForDocument(reaction.select_animation), "60_60_firstframe", null, null, svgThumb, 0, "tgs", currentReaction, 0);
@@ -2293,7 +2298,8 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                         imageView.setDrawable(Emoji.getEmojiDrawable(currentReaction.emojicon));
                     }
                 } else {
-                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8)); // 7eve9chat: custom emoji also at half the cell
+                    imageView.isDefaultReaction = false;
+                    imageView.setPadding(dp(4), dp(4), dp(4), dp(4));
                     imageView.span = new AnimatedEmojiSpan(currentReaction.documentId, null);
                     imageView.document = null;
                     imageView.imageReceiver.clearImage();
@@ -2659,9 +2665,14 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                 imageView.setViewSelected(selectedReactions.contains(currentReaction), false);
                 imageView.notDraw = false;
                 if (!currentReaction.isEffect && currentReaction.emojicon != null) {
-                    imageView.isDefaultReaction = true; imageView.setPadding(AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14), AndroidUtilities.dp(14)); // 7eve9chat: our emoji fill their frame and were asked at half the cell
+                    imageView.isDefaultReaction = true;
+                    imageView.setPadding(dp(4), dp(4), dp(4), dp(4));
+                    Drawable localEmoji = Emoji.getReactionEmojiDrawable(currentReaction.emojicon);
                     TLRPC.TL_availableReaction reaction = MediaDataController.getInstance(currentAccount).getReactionsMap().get(currentReaction.emojicon);
-                    if (reaction != null) {
+                    if (localEmoji != null) {
+                        imageView.imageReceiver.setImageBitmap(ReactionsLayoutInBubble.boundsEmoji(localEmoji));
+                        imageView.preloadEffectImageReceiver.clearImage();
+                    } else if (reaction != null) {
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(reaction.activate_animation, Theme.key_windowBackgroundWhiteGrayIcon, 0.2f);
                         if (!LiteMode.isEnabled(LiteMode.FLAG_ANIMATED_EMOJI_REACTIONS)) {
                             imageView.imageReceiver.setImage(ImageLocation.getForDocument(reaction.select_animation), "60_60_firstframe", null, null, svgThumb, 0, "tgs", currentReaction, 0);
@@ -2681,7 +2692,8 @@ public class SelectAnimatedEmojiDialog extends FrameLayout implements Notificati
                         imageView.premiumLockIconView.setImageReceiver(null);
                     }
                 } else {
-                    imageView.isDefaultReaction = false; imageView.setPadding(AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8), AndroidUtilities.dp(8)); // 7eve9chat: custom emoji also at half the cell
+                    imageView.isDefaultReaction = false;
+                    imageView.setPadding(dp(4), dp(4), dp(4), dp(4));
                     imageView.span = new AnimatedEmojiSpan(currentReaction.documentId, null);
                     imageView.document = null;
                     imageView.imageReceiver.clearImage();

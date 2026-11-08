@@ -337,6 +337,7 @@ public class ReactionsLayoutInBubble {
 
     private static final int MESSAGE_EMOJI_SLOT_DP = 22;
     private static final int MESSAGE_REACTION_HEIGHT_DP = 26;
+    private static final int REACTOR_AVATAR_DP = 20;
 
     private final ArrayList<Integer> reactionLineWidths = new ArrayList<>();
     // 7eve9chat: the app's own emoji ignore their bounds when fullSize (SimpleEmojiDrawable draws a
@@ -413,7 +414,7 @@ public class ReactionsLayoutInBubble {
                     button.users.size();
                     int c1 = 1;
                     int c2 = button.users.size() > 1 ? button.users.size() - 1 : 0;
-                    button.width += dp(1) + c1 * dp(10) + c2 * dp(10) * 0.8f + dp(1);
+                    button.width += dp(1) + c1 * dp(REACTOR_AVATAR_DP) + c2 * (int) (dp(REACTOR_AVATAR_DP) * 0.8f) + dp(1);
                     button.avatarsDrawable.height = dp(MESSAGE_REACTION_HEIGHT_DP);
                 } else if (button.hasName) {
                     button.width += button.textDrawable.getAnimateToWidth() + dp(4);
@@ -1358,10 +1359,10 @@ public class ReactionsLayoutInBubble {
                     avatarsDrawable = new AvatarsDrawable(parentView, false);
                     avatarsDrawable.transitionDuration = ChatListItemAnimator.DEFAULT_DURATION;
                     avatarsDrawable.transitionInterpolator = ChatListItemAnimator.DEFAULT_INTERPOLATOR;
-                    avatarsDrawable.setSize(dp(10)); // 7eve9chat: halved for the on-message chips
+                    avatarsDrawable.setSize(dp(REACTOR_AVATAR_DP));
                     avatarsDrawable.width = dp(100);
                     avatarsDrawable.height = height;
-                    avatarsDrawable.setAvatarsTextSize(dp(9)); // 7eve9chat: halved (fits inside the 10dp avatars)
+                    avatarsDrawable.setAvatarsTextSize(dp(11));
                 }
                 if (attached) {
                     avatarsDrawable.onAttachedToWindow();
