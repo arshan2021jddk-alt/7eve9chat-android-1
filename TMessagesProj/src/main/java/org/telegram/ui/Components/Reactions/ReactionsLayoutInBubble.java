@@ -335,12 +335,15 @@ public class ReactionsLayoutInBubble {
         isEmpty = reactionButtons.isEmpty();
     }
 
+    private static final int MESSAGE_EMOJI_SLOT_DP = 22;
+    private static final int MESSAGE_REACTION_HEIGHT_DP = 26;
+
     private final ArrayList<Integer> reactionLineWidths = new ArrayList<>();
     // 7eve9chat: the app's own emoji ignore their bounds when fullSize (SimpleEmojiDrawable draws a
     // bigImgSize square around the bounds' centre), so a receiver-set emoji rendered at its intrinsic
     // 34dp no matter the chip size - the emoji overflowed the frame. This wrapper scales the canvas so
     // the emoji fills exactly the bounds the receiver asks for.
-    static Drawable boundsEmoji(Drawable d) {
+    public static Drawable boundsEmoji(Drawable d) {
         if (d == null) {
             return null;
         }
@@ -405,14 +408,13 @@ public class ReactionsLayoutInBubble {
                     button.width += button.counterDrawable.getCurrentWidth() + dp(8);
                 }
             } else {
-                // Keep the message chip large enough for the doubled reaction artwork.
-                button.width = (int) (dp(4) + dp(24) + dp(button.animatedEmojiDrawable != null ? 3 : 2));
+                button.width = (int) (dp(4) + dp(MESSAGE_EMOJI_SLOT_DP) + dp(button.animatedEmojiDrawable != null ? 3 : 2));
                 if (button.avatarsDrawable != null && button.users.size() > 0) {
                     button.users.size();
                     int c1 = 1;
                     int c2 = button.users.size() > 1 ? button.users.size() - 1 : 0;
                     button.width += dp(1) + c1 * dp(10) + c2 * dp(10) * 0.8f + dp(1);
-                    button.avatarsDrawable.height = dp(28);
+                    button.avatarsDrawable.height = dp(MESSAGE_REACTION_HEIGHT_DP);
                 } else if (button.hasName) {
                     button.width += button.textDrawable.getAnimateToWidth() + dp(4);
                 } else if (button.counterDrawable.getCurrentWidth() > 0) {
@@ -420,7 +422,7 @@ public class ReactionsLayoutInBubble {
                 } else {
                     button.width -= dp(1);
                 }
-                button.height = dp(28);
+                button.height = dp(MESSAGE_REACTION_HEIGHT_DP);
             }
 
             if (currentX + button.width > availableWidth) {
@@ -914,14 +916,14 @@ public class ReactionsLayoutInBubble {
                 textDrawable = new AnimatedTextView.AnimatedTextDrawable(true, true, true);
                 textDrawable.ignoreRTL = true;
                 textDrawable.setAnimationProperties(.4f, 0, 320, CubicBezierInterpolator.EASE_OUT_QUINT);
-                textDrawable.setTextSize(dp(isTag ? 13 : 7)); // 7eve9chat: halved for the on-message chips (tags stay)
+                textDrawable.setTextSize(dp(13));
                 textDrawable.setCallback(supercallback);
                 textDrawable.setTypeface(AndroidUtilities.bold());
                 textDrawable.setOverrideFullWidth(AndroidUtilities.displaySize.x);
             }
             if (scrimPreviewCounterDrawable == null) {
                 scrimPreviewCounterDrawable = new AnimatedTextView.AnimatedTextDrawable(false, false, false, true);
-                scrimPreviewCounterDrawable.setTextSize(dp(isTag ? 12 : 6)); // 7eve9chat: halved for the on-message chips (tags stay)
+                scrimPreviewCounterDrawable.setTextSize(dp(12));
                 scrimPreviewCounterDrawable.setCallback(supercallback);
                 scrimPreviewCounterDrawable.setTypeface(AndroidUtilities.bold());
                 scrimPreviewCounterDrawable.setOverrideFullWidth(AndroidUtilities.displaySize.x);
@@ -971,7 +973,7 @@ public class ReactionsLayoutInBubble {
                 } else if (visibleReaction.emojicon != null) {
                     // 7eve9chat: reactions drawn with the app's own emoji, so they look exactly like the
                     // emoji keyboard and the emoji in messages
-                    android.graphics.drawable.Drawable emojiDrawable = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
+                    android.graphics.drawable.Drawable emojiDrawable = org.telegram.messenger.Emoji.getReactionEmojiDrawable(visibleReaction.emojicon);
                     TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(visibleReaction.emojicon);
                     if (emojiDrawable != null) {
                         imageReceiver.setImageBitmap(boundsEmoji(emojiDrawable)); // 7eve9chat: scaled into the chip's emoji slot
@@ -1068,7 +1070,7 @@ public class ReactionsLayoutInBubble {
             ImageReceiver imageReceiver = animatedEmojiDrawable != null ? animatedEmojiDrawable.getImageReceiver() : this.imageReceiver;
             if (isSmall && imageReceiver != null) {
                 imageReceiver.setAlpha(alpha);
-                drawingImageRect.set((int) x, (int) y, dp(14), dp(14));
+                drawingImageRect.set((int) x, (int) y, (int) x + width, (int) y + height);
                 imageReceiver.setImageCoords(drawingImageRect);
                 imageReceiver.setRoundRadius(0);
                 drawImage(canvas, drawingImageRect, alpha);
@@ -1144,7 +1146,7 @@ public class ReactionsLayoutInBubble {
             boolean restore = false;
             int w = width;
             if (scrimProgress > 0 && !isTag && scrimPreviewCounterDrawable != null && avatarsDrawable == null) {
-                w = (int) (dp(4) + dp(24) + dp(animatedEmojiDrawable != null ? 3 : 2) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(4)); // 7eve9chat: halved
+                w = (int) (dp(4) + dp(MESSAGE_EMOJI_SLOT_DP) + dp(animatedEmojiDrawable != null ? 3 : 2) + scrimPreviewCounterDrawable.getCurrentWidth() + dp(4));
                 scrimPreviewCounterDrawable.setTextColor(lastDrawnTextColor);
             } else if (progress != 1f && animationType == ANIMATION_TYPE_MOVE) {
                 w = (int) (width * progress + animateFromWidth * (1f - progress));
@@ -1201,17 +1203,16 @@ public class ReactionsLayoutInBubble {
             if (imageReceiver != null) {
                 int size, X;
                 if (paid) {
-                    size = dp(isTag ? 11 : 22);
+                    size = dp(isTag ? 11 : 20);
                     X = dp(2);
                 } else if (animatedEmojiDrawable != null) {
-                    size = dp(isTag ? 12 : 24);
+                    size = dp(isTag ? 12 : 20);
                     X = dp(3);
                     imageReceiver.setRoundRadius(dp(3));
                 } else {
                     // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding);
-                    // message reaction artwork is twice the previous size.
                     final boolean ownEmoji = visibleReaction != null && visibleReaction.emojicon != null && !visibleReaction.isStar;
-                    size = dp(isTag ? (ownEmoji ? 8 : 10) : (ownEmoji ? 16 : 20));
+                    size = dp(isTag ? (ownEmoji ? 8 : 10) : 20);
                     X = ownEmoji ? dp(5) : dp(4);
                     imageReceiver.setRoundRadius(0);
                 }
@@ -1224,9 +1225,8 @@ public class ReactionsLayoutInBubble {
             }
 
             float tx = 0;
-            // Reserve the same emoji slot used by measure().
             final int inset = isTag ? (hasName && !drawTagDot() ? 10 : (hasName ? 9 : 8)) : (hasName && !drawTagDot() ? 5 : 4);
-            final int slot = isTag ? 20 : 24;
+            final int slot = isTag ? 20 : MESSAGE_EMOJI_SLOT_DP;
             if (textDrawable != null && textDrawable.isNotEmpty() > 0) {
                 canvas.save();
                 canvas.translate(x + dp(inset) + dp(slot) + dp(isTag ? 2 : 1), y);
@@ -1253,7 +1253,7 @@ public class ReactionsLayoutInBubble {
             if (!isTag) {
                 if (avatarsDrawable != null) {
                     canvas.save();
-                    canvas.translate(x + dp(5) + dp(24) + dp(1), y);
+                    canvas.translate(x + dp(5) + dp(MESSAGE_EMOJI_SLOT_DP) + dp(1), y);
                     avatarsDrawable.setAlpha(alpha);
                     avatarsDrawable.setTransitionProgress(progress);
                     avatarsDrawable.onDraw(canvas);
@@ -1308,7 +1308,7 @@ public class ReactionsLayoutInBubble {
                 ImageReceiver imageReceiver2 = getImageReceiver();
                 // 7eve9chat: the secondary receiver draws the reaction's server animation at twice the size (Telegram's Lottie icons have
                 // padding). Ours have none, so it came out twice too big and stuck out of the chip: the app's own emoji is enough.
-                if (imageReceiver2 != null && visibleReaction != null && visibleReaction.emojicon != null && org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon) != null) {
+                if (imageReceiver2 != null && visibleReaction != null && visibleReaction.emojicon != null && org.telegram.messenger.Emoji.getReactionEmojiDrawable(visibleReaction.emojicon) != null) {
                     removeImageReceiver();
                     imageReceiver2 = null;
                 }
@@ -1458,7 +1458,7 @@ public class ReactionsLayoutInBubble {
                     // the reaction's server animation (.tgs), which on a slow link stalls for seconds while
                     // drawPreview() keeps invalidating every frame - the chat froze ("hung") on tapping a
                     // reaction. No network from here on.
-                    android.graphics.drawable.Drawable big = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
+                    android.graphics.drawable.Drawable big = org.telegram.messenger.Emoji.getReactionEmojiDrawable(visibleReaction.emojicon);
                     if (big != null) {
                         previewImageReceiver = new ImageReceiver(parent);
                         previewImageReceiver.setLayerNum(7);
@@ -1684,7 +1684,7 @@ public class ReactionsLayoutInBubble {
             ImageReceiver imageReceiver = new ImageReceiver();
             imageReceiver.setParentView(parentView);
             imageReceiver.setUniqKeyPrefix(Integer.toString(animationUniq++));
-            android.graphics.drawable.Drawable emojiDrawable = reaction.emojicon != null ? org.telegram.messenger.Emoji.getEmojiBigDrawable(reaction.emojicon) : null;
+            android.graphics.drawable.Drawable emojiDrawable = reaction.emojicon != null ? org.telegram.messenger.Emoji.getReactionEmojiDrawable(reaction.emojicon) : null;
             TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(reaction.emojicon);
             if (emojiDrawable != null) {
                 imageReceiver.setImageBitmap(boundsEmoji(emojiDrawable)); // 7eve9chat: the app's own emoji, scaled

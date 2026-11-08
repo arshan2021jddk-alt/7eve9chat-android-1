@@ -92,7 +92,7 @@ public class ReactionImageHolder {
     }
 
     private static Emoji.EmojiDrawable getLocalEmoji(String emoticon) {
-        Drawable drawable = Emoji.getEmojiBigDrawable(emoticon);
+        Drawable drawable = Emoji.getReactionEmojiDrawable(emoticon);
         return drawable instanceof Emoji.EmojiDrawable ? (Emoji.EmojiDrawable) drawable : null;
     }
 

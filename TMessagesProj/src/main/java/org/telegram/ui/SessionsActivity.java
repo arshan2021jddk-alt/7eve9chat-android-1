@@ -760,7 +760,7 @@ public class SessionsActivity extends BaseFragment implements NotificationCenter
         ttlRow = -1;
         ttlDivideRow = -1;
 
-        if (false && currentType == 0 && getMessagesController().qrLoginCamera) { // 7eve9chat: no desktop QR login
+        if (currentType == 0) {
             qrCodeRow = rowCount++;
             qrCodeDividerRow = rowCount++;
         }
@@ -1255,7 +1255,11 @@ public class SessionsActivity extends BaseFragment implements NotificationCenter
                 this.error = null;
                 AndroidUtilities.runOnUIThread(() -> {
                     try {
-                        String code = link.substring("tg://login?token=".length());
+                        final String prefix = "tg://login?token=";
+                        if (!link.startsWith(prefix)) {
+                            throw new IllegalArgumentException("Unexpected login QR format");
+                        }
+                        String code = link.substring(prefix.length());
                         code = code.replaceAll("\\/", "_");
                         code = code.replaceAll("\\+", "-");
                         byte[] token = Base64.decode(code, Base64.URL_SAFE);
