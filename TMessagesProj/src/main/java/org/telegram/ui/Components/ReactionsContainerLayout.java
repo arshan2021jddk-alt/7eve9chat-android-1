@@ -2105,12 +2105,10 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 //                } else {
 //                    loopImageView.getImageReceiver().setImage(ImageLocation.getForDocument(document), ReactionsUtils.SELECT_ANIMATION_FILTER, null, null, hasEnterAnimation ? null : svgThumb, 0, "tgs", currentReaction, 0);
 //                }
-            } else if (currentReaction.emojicon != null && Emoji.getEmojiBigDrawable(currentReaction.emojicon) != null) {
-                // 7eve9chat: the picker shows the app's own emoji (the same look as the emoji keyboard and
-                // the reactions on messages), at 3/4 of the cell: they fill their frame, Telegram's icons have padding
-                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
-                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
-                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiBigDrawable(currentReaction.emojicon)));
+            } else if (currentReaction.emojicon != null && Emoji.getEmojiDrawable(currentReaction.emojicon) != null) {
+                enterImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
+                loopImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
+                pressedBackupImageView.getImageReceiver().setImageBitmap(smallerEmoji(Emoji.getEmojiDrawable(currentReaction.emojicon), type == TYPE_DEFAULT ? .65f : .5f));
                 if (lockIconView != null) {
                     lockIconView.setImageReceiver(loopImageView.getImageReceiver());
                 }
@@ -2690,13 +2688,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     }
 
 
-    // 7eve9chat: the app's own emoji ignore their bounds when fullSize (they draw a bigImgSize square
-    // around the centre), so the old setBounds trick changed nothing - the picker emoji were always
-    // 34dp. The wrapper scales the canvas: the emoji renders exactly at half the target bounds,
-    // centred (the user asked for the reactions at half of what they were).
-    private static android.graphics.drawable.Drawable smallerEmoji(android.graphics.drawable.Drawable d) {
-        if (d == null) return null;
-        final int intrinsic = Math.max(1, d.getBounds().width());
+    private static android.graphics.drawable.Drawable smallerEmoji(Emoji.EmojiDrawable d, float fraction) {
         return new android.graphics.drawable.Drawable() {
             private int alpha = 255;
 
@@ -2706,13 +2698,13 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
                 if (b.isEmpty()) {
                     return;
                 }
-                float scale = (Math.min(b.width(), b.height()) / 2f) / intrinsic;
-                canvas.save();
-                canvas.scale(scale, scale, b.centerX(), b.centerY());
-                d.setBounds(b.centerX(), b.centerY(), b.centerX(), b.centerY());
+                // Leave space around the corners of the emoji inside the selection circle.
+                final int size = Math.round(Math.min(b.width(), b.height()) * fraction);
+                final int left = b.left + (b.width() - size) / 2;
+                final int top = b.top + (b.height() - size) / 2;
+                d.setBounds(left, top, left + size, top + size);
                 d.setAlpha(alpha);
                 d.draw(canvas);
-                canvas.restore();
             }
 
             @Override
@@ -2730,15 +2722,6 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
                 return android.graphics.PixelFormat.TRANSLUCENT;
             }
 
-            @Override
-            public int getIntrinsicWidth() {
-                return d.getIntrinsicWidth() / 2;
-            }
-
-            @Override
-            public int getIntrinsicHeight() {
-                return d.getIntrinsicHeight() / 2;
-            }
         };
     }
 }

@@ -972,10 +972,10 @@ public class ReactionsLayoutInBubble {
                 } else if (visibleReaction.emojicon != null) {
                     // 7eve9chat: reactions drawn with the app's own emoji, so they look exactly like the
                     // emoji keyboard and the emoji in messages
-                    android.graphics.drawable.Drawable emojiDrawable = org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon);
+                    Emoji.EmojiDrawable emojiDrawable = Emoji.getEmojiDrawable(visibleReaction.emojicon);
                     TLRPC.TL_availableReaction r = MediaDataController.getInstance(currentAccount).getReactionsMap().get(visibleReaction.emojicon);
                     if (emojiDrawable != null) {
-                        imageReceiver.setImageBitmap(boundsEmoji(emojiDrawable)); // 7eve9chat: scaled into the chip's emoji slot
+                        imageReceiver.setImageBitmap(emojiDrawable);
                     } else if (r != null) {
                         //imageReceiver.setImage(ImageLocation.getForDocument(r.static_icon), "40_40", svgThumb, "webp", r, 1);
                         SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(r.static_icon, Theme.key_windowBackgroundGray, 1.0f);
@@ -1069,7 +1069,7 @@ public class ReactionsLayoutInBubble {
             ImageReceiver imageReceiver = animatedEmojiDrawable != null ? animatedEmojiDrawable.getImageReceiver() : this.imageReceiver;
             if (isSmall && imageReceiver != null) {
                 imageReceiver.setAlpha(alpha);
-                drawingImageRect.set((int) x, (int) y, dp(14), dp(14));
+                drawingImageRect.set((int) x, (int) y, (int) x + dp(14), (int) y + dp(14));
                 imageReceiver.setImageCoords(drawingImageRect);
                 imageReceiver.setRoundRadius(0);
                 drawImage(canvas, drawingImageRect, alpha);
@@ -1212,8 +1212,9 @@ public class ReactionsLayoutInBubble {
                     // 7eve9chat: an emoji fills its whole frame (Telegram's animated icons have padding);
                     // halved with the chip: 8dp where the 10dp slot was
                     final boolean ownEmoji = visibleReaction != null && visibleReaction.emojicon != null && !visibleReaction.isStar;
-                    size = ownEmoji ? dp(8) : dp(10);
-                    X = ownEmoji ? dp(5) : dp(4);
+                    final int slot = dp(10);
+                    size = ownEmoji && !isTag ? Math.round(slot * .85f) : ownEmoji ? dp(8) : slot;
+                    X = dp(4) + (slot - size) / 2;
                     imageReceiver.setRoundRadius(0);
                 }
                 int Y = (int) ((height - size) / 2f);
