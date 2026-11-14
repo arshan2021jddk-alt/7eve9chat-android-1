@@ -6429,13 +6429,14 @@ public class RestBridge {
             try {
                 for (int tlId : ids) {
                     String mongoId = messageMongoIdByTlId.get(tlId);
-                    if (mongoId != null) {
-                        try {
-                            request("DELETE", "/messages/" + mongoId + (forEveryone ? "" : "?forMe=1"), null, true);
-                        } catch (Exception inner) {
-                            FileLog.e(inner);
-                        }
+                    if (mongoId == null) {
+                        mongoId = lookupMessageMongoId(tlId);
                     }
+                    if (mongoId == null) {
+                        complete(onComplete, null, restError(404, "Message could not be resolved; deletion was not confirmed"));
+                        return;
+                    }
+                    request("DELETE", "/messages/" + mongoId + (forEveryone ? "" : "?forMe=1"), null, true);
                 }
                 TLRPC.TL_messages_affectedMessages result = new TLRPC.TL_messages_affectedMessages();
                 complete(onComplete, result, null);
