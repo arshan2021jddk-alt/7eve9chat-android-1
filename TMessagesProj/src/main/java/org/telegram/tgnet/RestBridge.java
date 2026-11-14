@@ -3318,12 +3318,32 @@ public class RestBridge {
         try {
             JSONObject conv = fetchConversation(convId);
             addConversationChat(conv, updates.chats);
-            refreshAdminCache(conv);
+            applyConversationUpdate(conv);
         } catch (Exception e) {
             FileLog.e(e);
         }
         updates.date = (int) (System.currentTimeMillis() / 1000L);
         return updates;
+    }
+
+    // REST edits and realtime changes must refresh the same UI and persistent cache.
+    void applyConversationUpdate(JSONObject conv) {
+        ArrayList<TLRPC.Chat> chats = new ArrayList<>();
+        buildConversationChat(conv, chats);
+        if (chats.isEmpty()) return;
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+            MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
+            controller.putChats(chats, false);
+            AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(null, chats, true, true);
+            for (TLRPC.Chat chat : chats) {
+                AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                        org.telegram.messenger.NotificationCenter.channelRightsUpdated, chat);
+            }
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                    org.telegram.messenger.NotificationCenter.updateInterfaces,
+                    MessagesController.UPDATE_MASK_CHAT | MessagesController.UPDATE_MASK_CHAT_NAME | MessagesController.UPDATE_MASK_CHAT_AVATAR);
+            refreshAdminCache(conv);
+        });
     }
 
     // The app keeps the owner / admin tags (and custom titles) in a cache it reloads at
@@ -13349,9 +13369,11 @@ public class RestBridge {
         chat.version = 1;
         if (selfMongoId != null && selfMongoId.equals(refId(conv, "owner"))) {
             chat.creator = true;
-        } else if (isSelfAdmin(conv)) {
-            chat.admin_rights = fullAdminRights();
         }
+        chat.admin_rights = adminRightsFor(conv, selfMongoId);
+        if (chat.admin_rights != null) chat.flags |= TLObject.FLAG_14;
+        chat.default_banned_rights = defaultBannedRights(conv.optJSONObject("defaultPermissions"));
+        chat.flags |= TLObject.FLAG_18;
         return chat;
     }
 
