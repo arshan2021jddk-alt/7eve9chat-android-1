@@ -3069,7 +3069,7 @@ public class RestBridge {
 
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 if (conv.has("_id")) {
-                    updates.chats.add(isChannel ? buildTLChannel(conv, chatTlId) : buildTLChat(conv, chatTlId));
+                    updates.chats.add(buildTLChannel(conv, chatTlId));
                 }
                 updates.date = (int) (System.currentTimeMillis() / 1000L);
                 complete(onComplete, updates, null);
@@ -11712,7 +11712,7 @@ public class RestBridge {
                 conversationIdByChatPeer.put(tlId, convId);
                 savePeerMap("peerMapChat", conversationIdByChatPeer);
 
-                TLRPC.Chat chat = isChannel ? buildTLChannel(conv, tlId) : buildTLChat(conv, tlId);
+                TLRPC.Chat chat = buildTLChannel(conv, tlId);
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
                 updates.chats.add(chat);
 
