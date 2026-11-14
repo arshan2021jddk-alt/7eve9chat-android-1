@@ -283,6 +283,20 @@ public class Emoji {
         return info != null;
     }
 
+    public static Drawable getReactionEmojiDrawable(String code) {
+        if (code == null) {
+            return null;
+        }
+        Drawable drawable = getEmojiBigDrawable(code);
+        if (drawable == null) {
+            String withoutPresentationSelectors = code.replace("\uFE0E", "").replace("\uFE0F", "");
+            if (!withoutPresentationSelectors.equals(code)) {
+                drawable = getEmojiBigDrawable(withoutPresentationSelectors);
+            }
+        }
+        return drawable;
+    }
+
     public static Drawable getEmojiBigDrawable(String code) {
         EmojiDrawable ed = null;
         CompoundEmoji.CompoundEmojiDrawable compoundEmojiDrawable = CompoundEmoji.getCompoundEmojiDrawable(code);

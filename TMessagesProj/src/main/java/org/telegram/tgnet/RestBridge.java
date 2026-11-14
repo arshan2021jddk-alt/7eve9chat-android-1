@@ -1089,7 +1089,6 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_channels_toggleAntiSpam
                     || request instanceof TLRPC.TL_channels_toggleAutotranslation
-                    || request instanceof TLRPC.TL_channels_deleteHistory
                     || request instanceof TLRPC.TL_messages_getAllDrafts) {
                 complete(onComplete, new TLRPC.TL_updates(), null);
                 return true;
@@ -2076,7 +2075,12 @@ public class RestBridge {
                 return true;
             }
             if (request instanceof TLRPC.TL_channels_readHistory) {
-                handleSimpleConversationCall(((TLRPC.TL_channels_readHistory) request).channel.channel_id, "POST", "/read", new JSONObject(), new TLRPC.TL_boolTrue(), onComplete, "/messages/conversations/");
+                TLRPC.TL_channels_readHistory req = (TLRPC.TL_channels_readHistory) request;
+                JSONObject body = new JSONObject();
+                body.put("maxId", req.max_id);
+                String boundary = getMessageMongoId(req.max_id);
+                if (boundary != null) body.put("maxMessageId", boundary);
+                handleSimpleConversationCall(req.channel.channel_id, "POST", "/read", body, new TLRPC.TL_boolTrue(), onComplete, "/messages/conversations/");
                 return true;
             }
             if (request instanceof TLRPC.TL_channels_getParticipant) {
@@ -2252,6 +2256,18 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_contacts_importContacts) {
                 handleImportContacts((TLRPC.TL_contacts_importContacts) request, onComplete);
+                return true;
+            }
+            if (request instanceof TLRPC.TL_channels_deleteHistory) {
+                TLRPC.TL_channels_deleteHistory req = (TLRPC.TL_channels_deleteHistory) request;
+                executor.execute(() -> {
+                    try {
+                        String convId = conversationIdByChatPeer.get(req.channel.channel_id);
+                        if (convId == null) throw new Exception("Unknown conversation");
+                        request("DELETE", "/conversations/" + convId + "?clear=1&forMe=" + (req.for_everyone ? "0" : "1"), null, true);
+                        complete(onComplete, new TLRPC.TL_updates(), null);
+                    } catch (Exception e) { complete(onComplete, null, genericError(e)); }
+                });
                 return true;
             }
             if (request instanceof TLRPC.TL_messages_deleteHistory) {
@@ -3130,7 +3146,7 @@ public class RestBridge {
         long tlId = idFromMongoId(convId);
         conversationIdByChatPeer.put(tlId, convId);
         savePeerMap("peerMapChat", conversationIdByChatPeer);
-        if ("channel".equals(conv.optString("type"))) {
+        if ("channel".equals(conv.optString("type")) || "group".equals(conv.optString("type"))) {
             chats.add(buildTLChannel(conv, tlId));
             TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
             peer.channel_id = tlId;
@@ -3201,7 +3217,7 @@ public class RestBridge {
                 if (convId != null) {
                     // "Also delete for <name>" (revoke) removes it for both
                     // sides; otherwise it's only hidden for me.
-                    request("DELETE", "/conversations/" + convId + (req.revoke ? "" : "?forMe=1"), null, true);
+                    request("DELETE", "/conversations/" + convId + "?forMe=" + (req.revoke ? "0" : "1") + (req.just_clear ? "&clear=1" : ""), null, true);
                 }
                 complete(onComplete, new TLRPC.TL_messages_affectedHistory(), null);
             } catch (RestException e) {
@@ -3319,7 +3335,7 @@ public class RestBridge {
         TLRPC.TL_updates updates = new TLRPC.TL_updates();
         try {
             JSONObject conv = fetchConversation(convId);
-            addConversationChat(conv, updates.chats);
+            if ("group".equals(conv.optString("type")) || "channel".equals(conv.optString("type"))) addConversationChat(conv, updates.chats);
             applyConversationUpdate(conv);
         } catch (Exception e) {
             FileLog.e(e);
@@ -3330,6 +3346,14 @@ public class RestBridge {
 
     // REST edits and realtime changes must refresh the same UI and persistent cache.
     void applyConversationUpdate(JSONObject conv) {
+        if ("private".equals(conv.optString("type")) || "saved".equals(conv.optString("type"))) {
+            TLRPC.Peer peer = resolvePeerForConversationId(conv.optString("_id"));
+            if (peer != null && peer.user_id != 0) org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+                MessagesController mc = MessagesController.getInstance(currentAccount);
+                mc.loadFullUser(mc.getUser(peer.user_id), 0, true);
+            });
+            return;
+        }
         ArrayList<TLRPC.Chat> chats = new ArrayList<>();
         buildConversationChat(conv, chats);
         if (chats.isEmpty()) return;
@@ -5738,8 +5762,10 @@ public class RestBridge {
                         dialog.notify_settings.mute_until = Integer.MAX_VALUE;
                         dialog.notify_settings.flags |= TLObject.FLAG_2;
                     }
-                    dialog.read_inbox_max_id = 0;
-                    dialog.read_outbox_max_id = 0;
+                    dialog.read_inbox_max_id = conv.optInt("readInboxMaxId", 0);
+                    dialog.read_outbox_max_id = conv.optInt("readOutboxMaxId", 0);
+                    dialog.ttl_period = conv.optInt("ttlPeriod", 0);
+                    dialog.flags |= TLObject.FLAG_4 << 1; // ttl_period: flag 5
                     dialog.unread_mentions_count = 0;
                     dialog.unread_reactions_count = 0;
                     dialog.unread_poll_votes_count = 0;
@@ -5812,6 +5838,8 @@ public class RestBridge {
                         TLRPC.Message tlMessage = buildAnyMessage(lastMessage, dialog.peer); // service messages too
                         result.messages.add(tlMessage);
                         dialog.top_message = tlMessage.id;
+                        if (dialog.unread_count == 0) dialog.read_inbox_max_id = Math.max(dialog.read_inbox_max_id, tlMessage.id);
+                        if ("read".equals(lastMessage.optString("status"))) dialog.read_outbox_max_id = Math.max(dialog.read_outbox_max_id, tlMessage.id);
                     }
 
                     if (archiveFolder) {
@@ -5953,7 +5981,12 @@ public class RestBridge {
                     complete(onComplete, result, null);
                     return;
                 }
-                request("POST", "/messages/conversations/" + conversationId + "/read", new JSONObject(), true);
+                JSONObject body = new JSONObject();
+                body.put("maxId", req.max_id);
+                String boundary = getMessageMongoId(req.max_id);
+                if (boundary != null) body.put("maxMessageId", boundary);
+                JSONObject receipt = request("POST", "/messages/conversations/" + conversationId + "/read", body, true);
+                SocketBridge.getInstance(currentAccount).applyReadReceipt(receipt);
                 complete(onComplete, result, null);
             } catch (Exception e) {
                 FileLog.e(e);
@@ -6209,6 +6242,11 @@ public class RestBridge {
                 TLRPC.TL_userFull full = new TLRPC.TL_userFull();
                 full.id = user.id;
                 full.user = user;
+                String timerConvId = conversationIdByUserPeer.get(user.id);
+                if (timerConvId != null) {
+                    full.ttl_period = fetchConversation(timerConvId).optInt("ttlPeriod", 0);
+                    full.flags |= TLObject.FLAG_14;
+                }
                 full.blocked = !self && userJson.optBoolean("blockedByMe", false);
                 String about = userJson.optString("about", null);
                 if (about != null && about.trim().length() > 0 && !"null".equals(about)) {
@@ -11711,6 +11749,8 @@ public class RestBridge {
 
                 TLRPC.TL_chatFull full = new TLRPC.TL_chatFull();
                 full.id = req.chat_id;
+                full.ttl_period = conv.optInt("ttlPeriod", 0);
+                full.flags |= TLObject.FLAG_14;
                 full.about = conv.optString("description", "");
                 full.notify_settings = new TLRPC.TL_peerNotifySettings();
                 full.chat_photo = buildFullChatPhoto(conv);
@@ -14530,3 +14570,4 @@ public class RestBridge {
         return out.toString("UTF-8");
     }
 }
+

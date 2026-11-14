@@ -9997,6 +9997,11 @@ public class MessagesController extends BaseController implements NotificationCe
         removePromoDialog();
     }
 
+    public void applyServerHistoryClear(long did, boolean removeDialog) {
+        // first=-1 applies local storage/UI changes without sending another delete.
+        deleteDialog(did, -1, removeDialog ? 0 : 1, 0, false, null, 0);
+    }
+
     public void deleteDialog(final long did, int onlyHistory) {
         deleteDialog(did, onlyHistory, false);
     }
@@ -10214,7 +10219,7 @@ public class MessagesController extends BaseController implements NotificationCe
             getMessagesStorage().getStorageQueue().postRunnable(() -> AndroidUtilities.runOnUIThread(() -> getNotificationsController().removeNotificationsForDialog(did)));
         }
 
-        if (onlyHistory == 3) {
+        if (first == -1 || onlyHistory == 3) {
             return;
         }
 

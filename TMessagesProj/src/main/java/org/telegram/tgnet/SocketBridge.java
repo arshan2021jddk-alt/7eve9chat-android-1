@@ -91,7 +91,8 @@ public class SocketBridge {
         socket.on("typing", args -> onTyping(args, true));
         socket.on("stop_typing", args -> onTyping(args, false));
         socket.on("new_conversation", args -> refreshDialogs());
-        socket.on("conversation_deleted", args -> refreshDialogs());
+        socket.on("conversation_deleted", args -> onHistoryRemoved(args, true));
+        socket.on("conversation_history_cleared", args -> onHistoryRemoved(args, false));
         socket.on("message_updated", args -> onMessageUpdated(args));
         socket.on("message_deleted", args -> onMessageDeleted(args));
         socket.on("message_reaction", args -> onMessageReaction(args));
@@ -299,42 +300,48 @@ public class SocketBridge {
         }
     }
 
+    void applyReadReceipt(JSONObject data) { onMessagesRead(data); }
+
     private void onMessagesRead(Object... args) {
         try {
-            if (args.length == 0 || !(args[0] instanceof JSONObject)) {
-                return;
-            }
+            if (args.length == 0 || !(args[0] instanceof JSONObject)) return;
             JSONObject data = (JSONObject) args[0];
-            String conversationId = data.optString("conversationId", null);
-            String userId = data.optString("userId", null);
-            if (conversationId == null || userId == null) {
-                return;
-            }
             RestBridge rest = RestBridge.getInstance(currentAccount);
-            if (userId.equals(rest.getSelfMongoId())) {
-                // We read it ourselves (e.g. from another device) - nothing
-                // to reflect on our own outbox ticks.
-                return;
+            TLRPC.Peer peer = rest.resolvePeerForConversationId(data.optString("conversationId"));
+            int max = data.optInt("maxId", 0);
+            if (peer == null || max <= 0) return;
+            boolean mine = data.optString("userId").equals(rest.getSelfMongoId());
+            TLRPC.Update update;
+            if (peer.channel_id != 0) {
+                if (mine) {
+                    TL_update.TL_updateReadChannelInbox u = new TL_update.TL_updateReadChannelInbox();
+                    u.channel_id = peer.channel_id; u.max_id = max; u.still_unread_count = data.optInt("unreadCount", 0); update = u;
+                } else {
+                    TL_update.TL_updateReadChannelOutbox u = new TL_update.TL_updateReadChannelOutbox();
+                    u.channel_id = peer.channel_id; u.max_id = max; update = u;
+                }
+            } else if (mine) {
+                TL_update.TL_updateReadHistoryInbox u = new TL_update.TL_updateReadHistoryInbox();
+                u.peer = peer; u.max_id = max; u.still_unread_count = data.optInt("unreadCount", 0); update = u;
+            } else {
+                TL_update.TL_updateReadHistoryOutbox u = new TL_update.TL_updateReadHistoryOutbox();
+                u.peer = peer; u.max_id = max; update = u;
             }
-            TLRPC.Peer peer = rest.resolvePeerForConversationId(conversationId);
-            if (peer == null) {
-                return;
-            }
+            TLRPC.TL_updates updates = new TLRPC.TL_updates(); updates.updates.add(update);
+            updates.date = (int) (System.currentTimeMillis() / 1000L); deliver(updates);
+        } catch (Exception e) { FileLog.e(e); }
+    }
 
-            TL_update.TL_updateReadHistoryOutbox update = new TL_update.TL_updateReadHistoryOutbox();
-            update.peer = peer;
-            update.max_id = Integer.MAX_VALUE;
-            update.pts = 0;
-            update.pts_count = 0;
-
-            TLRPC.TL_updates updates = new TLRPC.TL_updates();
-            updates.updates.add(update);
-            updates.date = (int) (System.currentTimeMillis() / 1000L);
-            updates.seq = 0;
-            deliver(updates);
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
+    private void onHistoryRemoved(Object[] args, boolean removeDialog) {
+        if (args.length == 0) return;
+        String convId = args[0] instanceof JSONObject ? ((JSONObject) args[0]).optString("conversationId") : String.valueOf(args[0]);
+        TLRPC.Peer peer = RestBridge.getInstance(currentAccount).resolvePeerForConversationId(convId);
+        if (peer == null) return;
+        long did = peer.user_id != 0 ? peer.user_id : -(peer.channel_id != 0 ? peer.channel_id : peer.chat_id);
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+            MessagesController.getInstance(currentAccount).applyServerHistoryClear(did, removeDialog);
+            refreshDialogs();
+        });
     }
 
     private void onUserStatusChange(Object... args) {
@@ -618,7 +625,22 @@ public class SocketBridge {
             if (!"group".equals(type) && !"channel".equals(type)) {
                 return;
             }
-            RestBridge.getInstance(currentAccount).applyConversationUpdate(conv);
+            RestBridge rest = RestBridge.getInstance(currentAccount);
+            ArrayList<TLRPC.Chat> chats = new ArrayList<>();
+            rest.buildConversationChat(conv, chats);
+            if (chats.isEmpty()) {
+                return;
+            }
+            // someone else promoted / demoted an admin or changed a title: fresh tags
+            if (conv.has("owner") && conv.has("admins")) rest.refreshAdminCache(conv);
+            Utilities.stageQueue.postRunnable(() -> {
+                MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
+                controller.putChats(chats, false);
+                AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(null, chats, true, true);
+                org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
+                        AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                                org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_CHAT));
+            });
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -850,3 +872,4 @@ public class SocketBridge {
         }
     }
 }
+

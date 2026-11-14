@@ -759,7 +759,7 @@ public class ReactionsEffectOverlay {
             return;
         }
         // 7eve9chat: reactions are the app's own emoji - no Telegram-styled animated emoji flying in
-        if (visibleReaction.emojicon != null && org.telegram.messenger.Emoji.getEmojiBigDrawable(visibleReaction.emojicon) != null) {
+        if (visibleReaction.emojicon != null && org.telegram.messenger.Emoji.getReactionEmojiDrawable(visibleReaction.emojicon) != null) {
             return;
         }
         if (animationType == ONLY_MOVE_ANIMATION || animationType == LONG_ANIMATION) {
