@@ -618,22 +618,7 @@ public class SocketBridge {
             if (!"group".equals(type) && !"channel".equals(type)) {
                 return;
             }
-            RestBridge rest = RestBridge.getInstance(currentAccount);
-            ArrayList<TLRPC.Chat> chats = new ArrayList<>();
-            rest.buildConversationChat(conv, chats);
-            if (chats.isEmpty()) {
-                return;
-            }
-            // someone else promoted / demoted an admin or changed a title: fresh tags
-            if (conv.has("owner") && conv.has("admins")) rest.refreshAdminCache(conv);
-            Utilities.stageQueue.postRunnable(() -> {
-                MessagesController controller = AccountInstance.getInstance(currentAccount).getMessagesController();
-                controller.putChats(chats, false);
-                AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(null, chats, true, true);
-                org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
-                        AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
-                                org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_CHAT));
-            });
+            RestBridge.getInstance(currentAccount).applyConversationUpdate(conv);
         } catch (Exception e) {
             FileLog.e(e);
         }
