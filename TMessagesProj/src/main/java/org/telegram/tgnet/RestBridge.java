@@ -1409,6 +1409,48 @@ public class RestBridge {
                 handleSetBotInfo((TL_bots.setBotInfo) request, onComplete);
                 return true;
             }
+            if (request instanceof TLRPC.TL_photos_deletePhotos) {
+                TLRPC.TL_photos_deletePhotos req = (TLRPC.TL_photos_deletePhotos) request;
+                executor.execute(() -> {
+                    try {
+                        JSONArray urls = new JSONArray();
+                        Vector<Vector.Long> removed = new Vector<>(Vector.Long::TLDeserialize);
+                        for (TLRPC.InputPhoto photo : req.id) {
+                            String path = profilePhotoPath(photo.id);
+                            if (path == null) throw new Exception("PHOTO_ID_INVALID");
+                            urls.put(path);
+                            Vector.Long value = new Vector.Long(0, 0); value.value = photo.id; removed.objects.add(value);
+                        }
+                        JSONObject body = new JSONObject(); body.put("urls", urls);
+                        publishSelfPhoto(request("DELETE", "/auth/profile-photos", body, true));
+                        complete(onComplete, removed, null);
+                    } catch (Exception e) { complete(onComplete, null, genericError(e)); }
+                });
+                return true;
+            }
+            if (request instanceof TLRPC.TL_photos_updateProfilePhoto
+                    && (((TLRPC.TL_photos_updateProfilePhoto) request).bot == null || ((TLRPC.TL_photos_updateProfilePhoto) request).bot instanceof TLRPC.TL_inputUserEmpty)) {
+                TLRPC.TL_photos_updateProfilePhoto req = (TLRPC.TL_photos_updateProfilePhoto) request;
+                executor.execute(() -> {
+                    try {
+                        boolean remove = req.id == null || req.id instanceof TLRPC.TL_inputPhotoEmpty;
+                        JSONObject body = new JSONObject();
+                        if (remove) body.put("current", true);
+                        else {
+                            String path = profilePhotoPath(req.id.id);
+                            if (path == null) throw new Exception("PHOTO_ID_INVALID");
+                            body.put("avatar", path);
+                        }
+                        JSONObject json = request(remove ? "DELETE" : "PUT", remove ? "/auth/profile-photos" : "/auth/profile", body, true);
+                        TLRPC.TL_photos_photo result = new TLRPC.TL_photos_photo();
+                        result.users.add(publishSelfPhoto(json));
+                        String avatar = json.optString("avatar", "");
+                        result.photo = avatar.isEmpty() ? new TLRPC.TL_photoEmpty() : buildProfilePhoto(avatar, jsonStr(json, "avatarVideo"));
+                        complete(onComplete, result, null);
+                    } catch (Exception e) { complete(onComplete, null, genericError(e)); }
+                });
+                return true;
+            }
             if (request instanceof TLRPC.TL_photos_updateProfilePhoto && ((TLRPC.TL_photos_updateProfilePhoto) request).bot != null
                     && !(((TLRPC.TL_photos_updateProfilePhoto) request).bot instanceof TLRPC.TL_inputUserEmpty)) {
                 handleBotPhoto(((TLRPC.TL_photos_updateProfilePhoto) request).bot, null, onComplete);
@@ -4371,6 +4413,34 @@ public class RestBridge {
             }
             complete(onComplete, result, null);
         });
+    }
+
+    private String profilePhotoPath(long id) throws Exception {
+        String path = relativeUploadPath(mediaUrlById.get(id));
+        if (path != null) return path;
+        JSONObject me = request("GET", "/auth/me", null, true);
+        JSONArray history = me.optJSONArray("avatars");
+        String current = me.optString("avatar", "");
+        if (!current.isEmpty() && idForUrl(absoluteUrl(current)) == id) return current;
+        for (int i = 0; history != null && i < history.length(); i++) {
+            String url = history.optString(i, "");
+            if (!url.isEmpty() && idForUrl(absoluteUrl(url)) == id) return url;
+        }
+        return null;
+    }
+
+    private TLRPC.User publishSelfPhoto(JSONObject json) throws Exception {
+        TLRPC.User user = buildTLUser(json, true);
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+            MessagesController.getInstance(currentAccount).putUser(user, false);
+            ArrayList<TLRPC.User> users = new ArrayList<>(); users.add(user);
+            AccountInstance.getInstance(currentAccount).getMessagesStorage().putUsersAndChats(users, null, true, true);
+            UserConfig.getInstance(currentAccount).setCurrentUser(user);
+            UserConfig.getInstance(currentAccount).saveConfig(true);
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
+                    org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_AVATAR);
+        });
+        return user;
     }
 
     private void handleGetUserPhotos(TLRPC.TL_photos_getUserPhotos req, RequestDelegate onComplete) {
