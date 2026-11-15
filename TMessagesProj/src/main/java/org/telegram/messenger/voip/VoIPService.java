@@ -2668,6 +2668,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		req.call = groupCall.getInputGroupCall();
 		req.params = new TLRPC.TL_dataJSON();
 		req.params.data = json;
+		final NativeInstance screenInstance = tgVoip[CAPTURE_DEVICE_SCREEN];
 		ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
 			if (response != null) {
 				AndroidUtilities.runOnUIThread(() -> mySource[CAPTURE_DEVICE_SCREEN] = ssrc);
@@ -2710,6 +2711,15 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				startGroupCheckShortpoll();
 			} else {
 				AndroidUtilities.runOnUIThread(() -> {
+					if (sharedInstance != this || groupCall == null || tgVoip[CAPTURE_DEVICE_SCREEN] != screenInstance) {
+						return;
+					}
+					// A rejected presentation must release native screen capture. Only
+					// duplicate-SSRC retries keep it alive for the replacement join.
+					if (error == null || !"GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
+						stopScreenCapture();
+					}
+					if (error == null) return;
 					if ("GROUPCALL_VIDEO_TOO_MUCH".equals(error.text)) {
 						groupCall.reloadGroupCall();
 					} else if ("JOIN_AS_PEER_INVALID".equals(error.text)) {
