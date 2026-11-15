@@ -1724,7 +1724,7 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
             if (VoIPService.getSharedInstance() != null && VoIPService.getSharedInstance().getVideoState(true) == Instance.VIDEO_STATE_ACTIVE) {
                 screenItem.setTextAndIcon(getString(R.string.VoipChatStopScreenCapture), R.drawable.msg_screencast_off);
             } else {
-                screenItem.setTextAndIcon(getString(R.string.VoipChatStartScreenCapture), R.drawable.msg_screencast);
+                screenItem.setTextAndIcon(getString(R.string.VoipChatStartScreenCapture) + " (" + getActiveScreenShareCount() + "/2)", R.drawable.msg_screencast);
             }
             updateRecordCallText();
         } else {
@@ -1737,7 +1737,7 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
                     screenItem.setTextAndIcon(getString(R.string.VoipChatStopScreenCapture), R.drawable.msg_screencast_off);
                     screenItem.setContentDescription(getString(R.string.VoipChatStopScreenCapture));
                 } else {
-                    screenItem.setTextAndIcon(getString(R.string.VoipChatStartScreenCapture), R.drawable.msg_screencast);
+                    screenItem.setTextAndIcon(getString(R.string.VoipChatStartScreenCapture) + " (" + getActiveScreenShareCount() + "/2)", R.drawable.msg_screencast);
                     screenItem.setContentDescription(getString(R.string.VoipChatStartScreenCapture));
                     screenShareItem.setVisibility(View.GONE);
                     screenItem.setVisibility(View.VISIBLE);
@@ -8352,7 +8352,21 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
 
     }
 
+    private int getActiveScreenShareCount() {
+        int count = 0;
+        if (call != null) {
+            for (TLRPC.GroupCallParticipant p : call.sortedParticipants) {
+                if (!p.left && p.presentation != null) count++;
+            }
+        }
+        return count;
+    }
+
     private void startScreenCapture() {
+        if (getActiveScreenShareCount() >= 2) {
+            if (parentActivity != null) android.widget.Toast.makeText(parentActivity, getString(R.string.VoipChatStartScreenCapture) + " (2/2)", android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (parentActivity == null) {
             return;
         }
