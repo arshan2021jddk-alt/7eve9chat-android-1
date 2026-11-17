@@ -2,11 +2,11 @@ from pathlib import Path
 import subprocess, tempfile
 
 base = Path(__file__).resolve().parents[1] / 'TMessagesProj/src/main/java/org/telegram/tgnet'
-rest = (base / 'RestBridge.java').read_text()
+rest = (base / 'RestBridge.java').read_text(encoding='utf-8')
 start = rest.index('    private String giftMongoId(')
 end = rest.index('\n    static int[] giftBackdrop', start)
 resolver = rest[start:end]
-socket = (base / 'SocketBridge.java').read_text()
+socket = (base / 'SocketBridge.java').read_text(encoding='utf-8')
 start = socket.index('                if (!userJson.has("nameColor")')
 end = socket.index('                fresh.contact = ', start)
 merge = socket[start:end]
@@ -49,6 +49,6 @@ public class AppearanceCheck {
 }'''
 with tempfile.TemporaryDirectory(prefix='7e9-appearance-') as tmp:
   file = Path(tmp) / 'AppearanceCheck.java'
-  file.write_text(source)
-  subprocess.run(['javac', '-d', tmp, str(file)], check=True)
+  file.write_text(source, encoding='utf-8')
+  subprocess.run(['javac', '--release', '8', '-encoding', 'UTF-8', '-d', tmp, str(file)], check=True)
   subprocess.run(['java', '-cp', tmp, 'AppearanceCheck'], check=True)
