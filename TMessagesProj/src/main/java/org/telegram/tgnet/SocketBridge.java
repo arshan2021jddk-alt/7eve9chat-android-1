@@ -796,6 +796,25 @@ public class SocketBridge {
                 if (!userJson.has("about") && known.bot) {
                     fresh.bot_info_version = known.bot_info_version;
                 }
+                if (!userJson.has("nameColor") && known.color != null) {
+                    fresh.color = known.color;
+                    fresh.flags2 |= TLObject.FLAG_8;
+                }
+                if (!userJson.has("profileTgColor") && known.profile_color != null) {
+                    fresh.profile_color = known.profile_color;
+                    fresh.flags2 |= TLObject.FLAG_9;
+                }
+                if (!userJson.has("emojiStatus") && known.emoji_status != null) {
+                    fresh.emoji_status = known.emoji_status;
+                    fresh.flags |= TLObject.FLAG_30;
+                }
+                if (!userJson.has("avatar") && known.photo != null) {
+                    fresh.photo = known.photo;
+                    fresh.flags |= TLObject.FLAG_5;
+                }
+                if (!userJson.has("isPremium")) {
+                    fresh.premium = known.premium;
+                }
                 fresh.contact = known.contact || fresh.contact;
                 fresh.mutual_contact = known.mutual_contact;
             }
@@ -804,7 +823,7 @@ public class SocketBridge {
             deliver(updates);
             org.telegram.messenger.AndroidUtilities.runOnUIThread(() ->
                     AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(
-                            org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_NAME | MessagesController.UPDATE_MASK_AVATAR));
+                            org.telegram.messenger.NotificationCenter.updateInterfaces, MessagesController.UPDATE_MASK_NAME | MessagesController.UPDATE_MASK_AVATAR | MessagesController.UPDATE_MASK_EMOJI_STATUS));
         } catch (Exception e) {
             FileLog.e(e);
         }

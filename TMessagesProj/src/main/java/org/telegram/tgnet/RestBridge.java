@@ -1746,15 +1746,21 @@ public class RestBridge {
                     try {
                         if (request instanceof TL_stars.saveStarGift) {
                             TL_stars.saveStarGift req = (TL_stars.saveStarGift) request;
-                            String giftId = req.stargift instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) req.stargift).slug : null;
-                            if (giftId != null && giftId.matches("[0-9a-fA-F]{24}")) {
-                                request("PUT", "/gifts/" + giftId + "/visibility", new JSONObject().put("visible", !req.unsave), true);
+                            String giftId = giftMongoId(req.stargift);
+                            if (giftId == null) {
+                                complete(onComplete, null, tlError(400, "STARGIFT_INVALID"));
+                                return;
                             }
+                            request("PUT", "/gifts/" + giftId + "/visibility", new JSONObject().put("visible", !req.unsave), true);
                         } else {
                             JSONArray ids = new JSONArray();
                             for (TL_stars.InputSavedStarGift g : ((TL_stars.toggleStarGiftsPinnedToTop) request).stargift) {
-                                String giftId = g instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) g).slug : null;
-                                if (giftId != null && giftId.matches("[0-9a-fA-F]{24}")) ids.put(giftId);
+                                String giftId = giftMongoId(g);
+                                if (giftId == null) {
+                                    complete(onComplete, null, tlError(400, "STARGIFT_INVALID"));
+                                    return;
+                                }
+                                ids.put(giftId);
                             }
                             request("PUT", "/gifts/pinned", new JSONObject().put("ids", ids), true);
                         }
@@ -1771,7 +1777,7 @@ public class RestBridge {
                 TL_stars.transferStarGift req = (TL_stars.transferStarGift) request;
                 executor.execute(() -> {
                     try {
-                        String giftId = req.stargift instanceof TL_stars.TL_inputSavedStarGiftSlug ? ((TL_stars.TL_inputSavedStarGiftSlug) req.stargift).slug : null;
+                        String giftId = giftMongoId(req.stargift);
                         String target = null;
                         if (req.to_id != null && req.to_id.user_id != 0) target = userMongoIdByTlId.get(req.to_id.user_id);
                         else if (req.to_id != null && (req.to_id.channel_id != 0 || req.to_id.chat_id != 0)) target = conversationIdByChatPeer.get(req.to_id.channel_id != 0 ? req.to_id.channel_id : req.to_id.chat_id);
@@ -11444,6 +11450,10 @@ public class RestBridge {
                     }
 
                     TL_stars.TL_savedStarGift saved = new TL_stars.TL_savedStarGift();
+                    int savedMessageId = idFromMongoIdInt32(g.getString("_id"));
+                    giftMongoIdBySavedId.put((long) savedMessageId, g.getString("_id"));
+                    saved.msg_id = savedMessageId;
+                    saved.flags |= 8; // msg_id for user-owned gift actions
                     // Shown as a Telegram collectible: backdrop colors and a pattern around it,
                     // and its owner can wear it around their avatar
                     TLRPC.Peer ownerPeer;
@@ -11498,6 +11508,20 @@ public class RestBridge {
             {0x4FB0B8, 0x2F8A92, 0x1B6168, 0xFFFFFF}, {0x7A8691, 0x56626C, 0x39434B, 0xFFFFFF},
     };
     private final java.util.concurrent.ConcurrentHashMap<Long, String> giftMongoIdByTlId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, String> giftMongoIdBySavedId = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private String giftMongoId(TL_stars.InputSavedStarGift input) {
+        String id = null;
+        if (input instanceof TL_stars.TL_inputSavedStarGiftSlug) {
+            id = ((TL_stars.TL_inputSavedStarGiftSlug) input).slug;
+        } else if (input instanceof TL_stars.TL_inputSavedStarGiftUser) {
+            id = giftMongoIdBySavedId.get((long) ((TL_stars.TL_inputSavedStarGiftUser) input).msg_id);
+        } else if (input instanceof TL_stars.TL_inputSavedStarGiftChat) {
+            id = giftMongoIdBySavedId.get(((TL_stars.TL_inputSavedStarGiftChat) input).saved_id);
+        }
+        return id != null && id.matches("[0-9a-fA-F]{24}") ? id : null;
+    }
 
     static int[] giftBackdrop(String giftMongoId) {
         return GIFT_BACKDROPS[(int) (Math.abs(idFromMongoId(giftMongoId)) % GIFT_BACKDROPS.length)];
