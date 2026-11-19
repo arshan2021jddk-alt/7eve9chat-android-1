@@ -596,7 +596,7 @@ public class ChatThemeController extends BaseController {
         if (update.peer instanceof TLRPC.TL_peerUser) {
             TLRPC.UserFull userFull = getMessagesController().getUserFull(update.peer.user_id);
             if (userFull != null) {
-                if (wallpaperEquals(userFull.wallpaper, update.wallpaper)) {
+                if (wallpaperEquals(userFull.wallpaper, update.wallpaper) && userFull.wallpaper_overridden == update.wallpaper_overridden) {
                     return;
                 }
                 final long dialogId = userFull.id;
@@ -678,19 +678,7 @@ public class ChatThemeController extends BaseController {
         if (dialogId >= 0) {
             TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(dialogId);
             req.peer = MessagesController.getInputPeer(user);
-            req.revert = onlyRevert;
-            if (!onlyRevert) {
-                TLRPC.UserFull userFull = getMessagesController().getUserFull(dialogId);
-                if (userFull != null) {
-                    userFull.wallpaper = null;
-                    userFull.flags &= ~16777216;
-                    getMessagesStorage().updateUserInfo(userFull, false);
-                }
-                saveChatWallpaper(dialogId, null);
-                if (notify) {
-                    NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.userInfoDidLoad, dialogId, userFull);
-                }
-            }
+            req.revert = true;
         } else {
             TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-dialogId);
             req.peer = MessagesController.getInputPeer(chat);

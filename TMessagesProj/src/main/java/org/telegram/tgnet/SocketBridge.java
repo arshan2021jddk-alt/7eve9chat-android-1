@@ -118,6 +118,12 @@ public class SocketBridge {
         socket.on("message_deleted", args -> onMessageDeleted(args));
         socket.on("message_reaction", args -> onMessageReaction(args));
         socket.on("pins_updated", args -> onPinsUpdated(args));
+        socket.on("chat_wallpaper", args -> {
+            if (args.length > 0 && args[0] instanceof JSONObject) {
+                JSONObject state = (JSONObject) args[0];
+                applyWallpaper(state, RestBridge.getInstance(currentAccount).resolvePeerForConversationId(state.optString("conversationId")));
+            }
+        });
         socket.on("conversation_updated", args -> onConversationUpdated(args));
         socket.on("removed_from_conversation", args -> {
             onRemovedFromConversation(args);
@@ -196,6 +202,7 @@ public class SocketBridge {
             }
             // Catch up on anything sent while we were offline.
             refreshDialogs();
+            RestBridge.getInstance(currentAccount).refreshWallpaperPeers();
             syncSecretChats();
         });
         socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
@@ -251,6 +258,28 @@ public class SocketBridge {
             socket.off();
             socket = null;
         }
+    }
+
+    private final java.util.Map<String, Long> wallpaperRevisions = new java.util.HashMap<>();
+
+    void applyWallpaper(JSONObject state, TLRPC.Peer peer) {
+        String conversationId = state.optString("conversationId");
+        long revision = state.optLong("revision", -1);
+        if (peer == null || revision < 0 || conversationId.isEmpty()) return;
+        AndroidUtilities.runOnUIThread(() -> {
+            if (wallpaperRevisions.getOrDefault(conversationId, -1L) >= revision) return;
+            wallpaperRevisions.put(conversationId, revision);
+            JSONObject wallpaper = state.optJSONObject("wallpaper");
+            TL_update.TL_updatePeerWallpaper update = new TL_update.TL_updatePeerWallpaper();
+            update.peer = peer;
+            if (wallpaper != null) {
+                update.wallpaper = RestBridge.getInstance(currentAccount).buildWallPaper(
+                        wallpaper.optString("url", null), wallpaper.optJSONObject("settings"));
+                update.wallpaper_overridden = state.optBoolean("personal");
+                update.flags |= 1;
+            }
+            org.telegram.messenger.ChatThemeController.getInstance(currentAccount).processUpdate(update);
+        });
     }
 
     private void onNewMessage(Object... args) {

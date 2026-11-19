@@ -6428,10 +6428,14 @@ public class RestBridge {
                             full.theme = TLRPC.ChatTheme.ofEmoticon(themeEmoticon);
                             full.flags |= TLObject.FLAG_15;
                         }
+                        TLRPC.TL_peerUser wallpaperPeer = new TLRPC.TL_peerUser();
+                        wallpaperPeer.user_id = user.id;
+                        trackWallpaperPeer(privateConvId, wallpaperPeer);
                         JSONObject mine = conv.optJSONObject("wallpaperByUser") != null ? conv.optJSONObject("wallpaperByUser").optJSONObject(selfMongoId) : null;
                         JSONObject shared = conv.optJSONObject("chatWallpaper");
                         JSONObject wp = mine != null ? mine : shared;
                         if (wp != null && (jsonStr(wp, "url") != null || wp.optJSONObject("settings") != null)) {
+                            full.wallpaper_overridden = mine != null;
                             full.wallpaper = buildWallPaper(jsonStr(wp, "url"), wp.optJSONObject("settings"));
                             full.flags |= TLObject.FLAG_24;
                         }
@@ -7281,10 +7285,10 @@ public class RestBridge {
         j.put("motion", st.motion);
         j.put("intensity", st.intensity);
         j.put("rotation", st.rotation);
-        j.put("background_color", st.background_color);
-        j.put("second_background_color", st.second_background_color);
-        j.put("third_background_color", st.third_background_color);
-        j.put("fourth_background_color", st.fourth_background_color);
+        if ((st.flags & TLObject.FLAG_0) != 0 || st.background_color != 0) j.put("background_color", st.background_color & 0xffffff);
+        if ((st.flags & TLObject.FLAG_4) != 0 || st.second_background_color != 0) j.put("second_background_color", st.second_background_color & 0xffffff);
+        if ((st.flags & TLObject.FLAG_5) != 0 || st.third_background_color != 0) j.put("third_background_color", st.third_background_color & 0xffffff);
+        if ((st.flags & TLObject.FLAG_6) != 0 || st.fourth_background_color != 0) j.put("fourth_background_color", st.fourth_background_color & 0xffffff);
         if (st.emoticon != null && !st.emoticon.isEmpty()) j.put("emoticon", st.emoticon); // a theme's wallpaper
         j.put("flags", st.flags);
         return j;
@@ -7305,6 +7309,7 @@ public class RestBridge {
         wp.id = media.document.id;
         wp.access_hash = 1;
         wp.slug = "7e9" + Long.toHexString(wp.id);
+        wp.pattern = settings != null && settings.optBoolean("pattern");
         wp.document = media.document;
         wp.settings = wallpaperSettingsFromJson(settings);
         wp.flags |= TLObject.FLAG_2; // settings present
@@ -7319,10 +7324,22 @@ public class RestBridge {
             st.motion = settings.optBoolean("motion", false);
             st.intensity = settings.optInt("intensity", 0);
             st.rotation = settings.optInt("rotation", 0);
-            st.background_color = settings.optInt("background_color", 0);
-            st.second_background_color = settings.optInt("second_background_color", 0);
-            st.third_background_color = settings.optInt("third_background_color", 0);
-            st.fourth_background_color = settings.optInt("fourth_background_color", 0);
+            if (settings.has("background_color")) {
+                st.background_color = settings.optInt("background_color", 0) & 0xffffff;
+                st.flags |= TLObject.FLAG_0;
+            }
+            if (settings.has("second_background_color")) {
+                st.second_background_color = settings.optInt("second_background_color", 0) & 0xffffff;
+                st.flags |= TLObject.FLAG_4;
+            }
+            if (settings.has("third_background_color")) {
+                st.third_background_color = settings.optInt("third_background_color", 0) & 0xffffff;
+                st.flags |= TLObject.FLAG_5;
+            }
+            if (settings.has("fourth_background_color")) {
+                st.fourth_background_color = settings.optInt("fourth_background_color", 0) & 0xffffff;
+                st.flags |= TLObject.FLAG_6;
+            }
             String emoticon = settings.optString("emoticon", "");
             if (!emoticon.isEmpty()) {
                 st.emoticon = emoticon;
@@ -7501,7 +7518,7 @@ public class RestBridge {
             try {
                 file = assembleUpload(req.file);
                 String mime = req.mime_type != null && !req.mime_type.isEmpty() ? req.mime_type : "image/jpeg";
-                JSONObject resp = requestMultipart("POST", "/messages/upload", null, "file", file, "wallpaper" + extensionForMime(mime), mime);
+                JSONObject resp = requestMultipart("POST", "/messages/upload?purpose=wallpaper", null, "file", file, "wallpaper" + extensionForMime(mime), mime);
                 TLRPC.WallPaper wp = buildWallPaper(resp.getString("url"), wallpaperSettingsToJson(req.settings));
                 savePeerMap("mediaMap", mediaUrlById);
                 complete(onComplete, wp, null);
@@ -7614,6 +7631,43 @@ public class RestBridge {
         });
     }
 
+    private final java.util.LinkedHashMap<String, TLRPC.Peer> recentWallpaperPeers = new java.util.LinkedHashMap<>(8, 0.75f, true);
+
+    private void trackWallpaperPeer(String id, TLRPC.Peer peer) {
+        synchronized (recentWallpaperPeers) {
+            recentWallpaperPeers.put(id, peer);
+            if (recentWallpaperPeers.size() > 8) {
+                recentWallpaperPeers.remove(recentWallpaperPeers.keySet().iterator().next());
+            }
+        }
+    }
+
+    void refreshWallpaperPeers() {
+        java.util.Map<String, TLRPC.Peer> recent;
+        synchronized (recentWallpaperPeers) {
+            recent = new java.util.LinkedHashMap<>(recentWallpaperPeers);
+        }
+        if (recent.isEmpty()) return;
+        executor.execute(() -> {
+            for (java.util.Map.Entry<String, TLRPC.Peer> entry : recent.entrySet()) {
+                try {
+                    String id = entry.getKey();
+                    JSONObject conv = request("GET", "/messages/conversations/" + id, null, true);
+                    JSONObject overrides = conv.optJSONObject("wallpaperByUser");
+                    JSONObject personal = overrides == null ? null : overrides.optJSONObject(selfMongoId);
+                    JSONObject state = new JSONObject();
+                    state.put("conversationId", id);
+                    state.put("revision", conv.optLong("wallpaperRevision", 0));
+                    state.put("wallpaper", personal != null ? personal : conv.optJSONObject("chatWallpaper"));
+                    state.put("personal", personal != null);
+                    SocketBridge.getInstance(currentAccount).applyWallpaper(state, entry.getValue());
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+        });
+    }
+
     private void handleSetChatWallPaper(TLRPC.TL_messages_setChatWallPaper req, RequestDelegate onComplete) {
         executor.execute(() -> {
             try {
@@ -7622,29 +7676,47 @@ public class RestBridge {
                     complete(onComplete, null, tlError(400, "PEER_ID_INVALID"));
                     return;
                 }
+                JSONObject current = request("GET", "/messages/conversations/" + convId, null, true);
                 JSONObject body = new JSONObject();
+                body.put("expectedRevision", current.optLong("wallpaperRevision", 0));
+                body.put("forBoth", req.for_both);
                 String path = req.wallpaper instanceof TLRPC.TL_inputWallPaper
                         ? relativeUploadPath(mediaUrlById.get(((TLRPC.TL_inputWallPaper) req.wallpaper).id)) : null;
-                // Plain color / gradient wallpapers have no file, only their colors
-                boolean noFile = !req.revert && path == null && req.settings != null
-                        && (req.wallpaper == null || req.wallpaper instanceof TLRPC.TL_inputWallPaperNoFile)
-                        && (req.settings.background_color != 0 || req.settings.second_background_color != 0
-                            || (req.settings.emoticon != null && !req.settings.emoticon.isEmpty()));
-                if (req.revert || (path == null && !noFile)) {
+                JSONObject settings = wallpaperSettingsToJson(req.settings);
+                String slug = req.wallpaper instanceof TLRPC.TL_inputWallPaperSlug
+                        ? ((TLRPC.TL_inputWallPaperSlug) req.wallpaper).slug : null;
+                boolean noFile = req.wallpaper instanceof TLRPC.TL_inputWallPaperNoFile
+                        || org.telegram.ui.ActionBar.Theme.COLOR_BACKGROUND_SLUG.equals(slug);
+                if (slug != null && slug.startsWith("7e9")) {
+                    path = relativeUploadPath(mediaUrlById.get(Long.parseUnsignedLong(slug.substring(3), 16)));
+                }
+                if (req.wallpaper == null && (req.flags & 2) != 0) {
+                    String id = getMessageMongoId(req.id);
+                    if (id == null) throw new IllegalArgumentException("WALLPAPER_INVALID");
+                    JSONArray messages = requestArray("GET", "/messages/by-ids?ids=" + id, null, true);
+                    JSONObject source = messages.optJSONObject(0);
+                    JSONObject action = source != null && convId.equals(source.optString("conversationId"))
+                            ? source.optJSONObject("systemAction") : null;
+                    if (action == null || !"set_chat_wallpaper".equals(action.optString("type"))) {
+                        throw new IllegalArgumentException("WALLPAPER_INVALID");
+                    }
+                    path = relativeUploadPath(jsonStr(action, "url"));
+                    noFile = path == null;
+                    if (req.settings == null) settings = action.optJSONObject("settings");
+                }
+                boolean reset = req.revert || org.telegram.ui.ActionBar.Theme.DEFAULT_BACKGROUND_SLUG.equals(slug)
+                        || (req.wallpaper == null && (req.flags & 2) == 0 && req.settings == null);
+                if (reset) {
                     body.put("revert", true);
                 } else {
+                    if (path == null && !noFile) throw new IllegalArgumentException("WALLPAPER_INVALID");
                     if (path != null) body.put("url", path);
-                    if (noFile) body.put("noFile", true);
-                    body.put("forBoth", req.for_both);
-                    body.put("settings", wallpaperSettingsToJson(req.settings));
+                    body.put("noFile", noFile);
+                    body.put("settings", settings);
                 }
-                JSONObject resp = request("PUT", "/conversations/" + convId + "/wallpaper", body, true);
+                JSONObject response = request("PUT", "/conversations/" + convId + "/wallpaper", body, true);
+                SocketBridge.getInstance(currentAccount).applyWallpaper(response, peerFromInput(req.peer));
                 TLRPC.TL_updates updates = new TLRPC.TL_updates();
-                if (resp.has("_id")) {
-                    TLRPC.Message service = buildAnyMessage(resp, peerFromInput(req.peer));
-                    updates.updates.add(newMessageUpdateFor(service));
-                    updates.date = service.date;
-                }
                 complete(onComplete, updates, null);
             } catch (Exception e) {
                 FileLog.e(e);
