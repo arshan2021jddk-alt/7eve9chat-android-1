@@ -254,6 +254,8 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
     private static final int MUTE_BUTTON_STATE_CANCEL_REMINDER = 7;
 
     public static GroupCallActivity groupCallInstance;
+    private boolean dismissingGroupCall;
+    private Runnable reopenAfterDismiss;
     public static boolean groupCallUiVisible;
     private final ProfileGalleryView avatarsViewPager;
     private final GridLayoutManager.SpanSizeLookup spanSizeLookup;
@@ -1161,6 +1163,10 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
 
     @Override
     public void dismiss() {
+        if (dismissingGroupCall) {
+            return;
+        }
+        dismissingGroupCall = true;
         parentActivity.removeOnUserLeaveHintListener(onUserLeaveHintListener);
         parentActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         groupCallUiVisible = false;
@@ -1838,7 +1844,20 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
     }
 
     public static void create(LaunchActivity activity, AccountInstance account, TLRPC.Chat scheduleChat, TLRPC.InputPeer schedulePeer, boolean hasFewPeers, String scheduledHash) {
-        if (groupCallInstance != null || schedulePeer == null && VoIPService.getSharedInstance() == null) {
+        if (groupCallInstance != null) {
+            GroupCallActivity current = groupCallInstance;
+            if (current.dismissingGroupCall && schedulePeer == null) {
+                VoIPService service = VoIPService.getSharedInstance();
+                current.reopenAfterDismiss = () -> {
+                    if (!activity.isFinishing() && !activity.isDestroyed() && service != null
+                            && service == VoIPService.getSharedInstance() && !service.isHangingUp()) {
+                        create(activity, account, null, null, hasFewPeers, scheduledHash);
+                    }
+                };
+            }
+            return;
+        }
+        if (schedulePeer == null && VoIPService.getSharedInstance() == null) {
             return;
         }
         if (schedulePeer != null) {
@@ -4733,8 +4752,8 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
 
         pipItem = new ActionBarMenuItem(context, null, 0, Theme.getColor(Theme.key_voipgroup_actionBarItems));
         pipItem.setLongClickEnabled(false);
-        pipItem.setIcon(R.drawable.msg_voice_pip);
-        pipItem.setContentDescription(getString(R.string.AccDescrPipMode));
+        pipItem.setIcon(isRtmpStream() ? R.drawable.msg_voice_pip : R.drawable.voice_minimize);
+        pipItem.setContentDescription(getString(isRtmpStream() ? R.string.AccDescrPipMode : R.string.PipMinimize));
         pipItem.setBackground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_voipgroup_actionBarItemsSelector), 6));
         pipItem.setOnClickListener(v -> {
             if (isRtmpStream()) {
@@ -4746,12 +4765,9 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
                 }
                 return;
             }
-            if (AndroidUtilities.checkInlinePermissions(parentActivity)) {
-                GroupCallPip.clearForce();
-                dismiss();
-            } else {
-                AlertsCreator.createDrawOverlayGroupCallPermissionDialog(getContext()).show();
-            }
+            // The app's ongoing-call bar restores this sheet without overlay permission.
+            GroupCallPip.clearForce();
+            dismiss();
         });
 
         screenShareItem = new ActionBarMenuItem(context, null, 0, Theme.getColor(Theme.key_voipgroup_actionBarItems));
@@ -6453,6 +6469,11 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
         if (pipSource != null) {
             pipSource.destroy();
             pipSource = null;
+        }
+        Runnable reopen = reopenAfterDismiss;
+        reopenAfterDismiss = null;
+        if (reopen != null) {
+            AndroidUtilities.runOnUIThread(reopen);
         }
     }
 
