@@ -4190,7 +4190,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (currentFileNames[a] != null && currentFileNames[a].equals(location)) {
                     Long loadedSize = (Long) args[1];
                     Long totalSize = (Long) args[2];
-                    float loadProgress = Math.min(1f, loadedSize / (float) totalSize);
+                    float loadProgress = totalSize > 0 ? Math.min(0.99f, loadedSize / (float) totalSize) : 0f;
                     boolean animated = a == 0 || a == 1 && sideImage == rightImage || a == 2 && sideImage == leftImage;
                     photoProgressViews[a].setProgress(loadProgress, animated);
                     if (a == 0 && videoPlayer != null && videoPlayerSeekbar != null) {

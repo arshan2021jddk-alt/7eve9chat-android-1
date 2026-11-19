@@ -18234,9 +18234,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     @Override
     public void onProgressDownload(String fileName, long downloadedSize, long totalSize) {
-        float progress = totalSize == 0 ? 0 : Math.min(1f, downloadedSize / (float) totalSize);
+        float progress = totalSize > 0 ? Math.min(0.99f, downloadedSize / (float) totalSize) : 0f;
         currentMessageObject.loadedFileSize = downloadedSize;
-        createLoadingProgressLayout(downloadedSize, totalSize);
+        if (totalSize <= 0 || downloadedSize < totalSize) {
+            createLoadingProgressLayout(downloadedSize, totalSize);
+        }
         if (drawVideoImageButton) {
             videoRadialProgress.setProgress(progress, true);
         } else {
