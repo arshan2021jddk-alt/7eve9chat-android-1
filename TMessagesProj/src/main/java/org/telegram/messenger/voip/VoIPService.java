@@ -373,6 +373,9 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 
 	private boolean endCallAfterRequest;
 	private ArrayList<TL_phone.PhoneCall> pendingUpdates = new ArrayList<>();
+	private final ArrayList<byte[]> pendingCallSignaling = new ArrayList<>();
+	private static final int MAX_PENDING_CALL_SIGNALS = 32;
+	private final int[] groupJoinAttempts = new int[2];
 	private Runnable delayedStartOutgoingCall;
 
 	private boolean startedRinging;
@@ -1386,9 +1389,14 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				MessagesController.getInstance(currentAccount).processUpdates(updates, false);
 			}
 		});
+		groupJoinAttempts[CAPTURE_DEVICE_SCREEN]++;
+		reconnectScreenCapture = false;
 		NativeInstance instance = tgVoip[CAPTURE_DEVICE_SCREEN];
 		if (instance != null) {
 			Utilities.globalQueue.postRunnable(instance::stopGroup);
+		} else if (captureDevice[CAPTURE_DEVICE_SCREEN] != 0 && destroyCaptureDevice[CAPTURE_DEVICE_SCREEN]) {
+			// Capture can exist before the main connection lets the screen join start.
+			NativeInstance.destroyVideoCapturer(captureDevice[CAPTURE_DEVICE_SCREEN]);
 		}
 		mySource[CAPTURE_DEVICE_SCREEN] = 0;
 		tgVoip[CAPTURE_DEVICE_SCREEN] = null;
@@ -1519,11 +1527,32 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		return currentState == STATE_HANGING_UP;
 	}
 
+	private boolean acceptsPrivateCallSignaling(long callId) {
+		return sharedInstance == this && user != null && privateCall != null
+				&& !(privateCall instanceof TL_phone.TL_phoneCallDiscarded) && getCallID() == callId
+				&& !isHangingUp() && !isFinished() && currentState != STATE_BUSY;
+	}
+
 	public void onSignalingData(TL_update.TL_updatePhoneCallSignalingData data) {
-		if (user == null || tgVoip[CAPTURE_DEVICE_CAMERA] == null || tgVoip[CAPTURE_DEVICE_CAMERA].isGroup() || getCallID() != data.phone_call_id) {
+		if (!acceptsPrivateCallSignaling(data.phone_call_id) || data.data == null || data.data.length == 0) {
 			return;
 		}
-		tgVoip[CAPTURE_DEVICE_CAMERA].onSignalingDataReceive(data.data);
+		NativeInstance instance = tgVoip[CAPTURE_DEVICE_CAMERA];
+		if (instance == null) {
+			// The peer can start signaling before confirmCall returns on this device.
+			if (pendingCallSignaling.size() < MAX_PENDING_CALL_SIGNALS) {
+				pendingCallSignaling.add(data.data);
+			}
+		} else if (!instance.isGroup()) {
+			instance.onSignalingDataReceive(data.data);
+		}
+	}
+
+	private void deliverPendingCallSignaling(NativeInstance instance) {
+		for (byte[] packet : pendingCallSignaling) {
+			instance.onSignalingDataReceive(packet);
+		}
+		pendingCallSignaling.clear();
 	}
 
 	public long getSelfId() {
@@ -1877,11 +1906,14 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		req.protocol.udp_p2p = req.protocol.udp_reflector = true;
 		Collections.addAll(req.protocol.library_versions, NativeInstance.getAllVersions());
 		ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
-			if (error != null) {
-				callFailed();
-			} else {
+			if (!acceptsPrivateCallSignaling(req.peer.id)) {
+				return;
+			}
+			if (response instanceof TL_phone.TL_phone_phoneCall) {
 				privateCall = ((TL_phone.TL_phone_phoneCall) response).phone_call;
 				initiateActualEncryptedCall();
+			} else {
+				callFailed();
 			}
 		}));
 	}
@@ -2026,63 +2058,64 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				req.join_as = new TLRPC.TL_inputPeerUser();
 				req.join_as.user_id = AccountInstance.getInstance(currentAccount).getUserConfig().getClientUserId();
 			}
-			ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
-				if (response != null) {
-					AndroidUtilities.runOnUIThread(() -> mySource[CAPTURE_DEVICE_CAMERA] = ssrc);
+			final ChatObject.Call joiningCall = groupCall;
+			final int attempt = ++groupJoinAttempts[CAPTURE_DEVICE_CAMERA];
+			ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+				if (!isCurrentGroupJoin(joiningCall, CAPTURE_DEVICE_CAMERA, attempt)) {
+					return;
+				}
+				if (response instanceof TLRPC.Updates) {
 					TLRPC.Updates updates = (TLRPC.Updates) response;
+					mySource[CAPTURE_DEVICE_CAMERA] = ssrc;
 					long selfId = getSelfId();
-					for (int a = 0, N = updates.updates.size(); a < N; a++) {
-						TLRPC.Update update = updates.updates.get(a);
+					for (TLRPC.Update update : updates.updates) {
 						if (update instanceof TL_update.TL_updateGroupCallParticipants) {
-							TL_update.TL_updateGroupCallParticipants updateGroupCallParticipants = (TL_update.TL_updateGroupCallParticipants) update;
-							for (int b = 0, N2 = updateGroupCallParticipants.participants.size(); b < N2; b++) {
-								TLRPC.GroupCallParticipant participant = updateGroupCallParticipants.participants.get(b);
+							for (TLRPC.GroupCallParticipant participant : ((TL_update.TL_updateGroupCallParticipants) update).participants) {
 								if (MessageObject.getPeerId(participant.peer) == selfId) {
-									AndroidUtilities.runOnUIThread(() -> mySource[CAPTURE_DEVICE_CAMERA] = participant.source);
-									if (BuildVars.LOGS_ENABLED) {
-										FileLog.d("join source = " + participant.source);
-									}
+									mySource[CAPTURE_DEVICE_CAMERA] = participant.source;
 									break;
 								}
 							}
 						} else if (update instanceof TL_update.TL_updateGroupCallConnection) {
-							TL_update.TL_updateGroupCallConnection updateGroupCallConnection = (TL_update.TL_updateGroupCallConnection) update;
-							if (!updateGroupCallConnection.presentation) {
-								myParams = updateGroupCallConnection.params;
+							TL_update.TL_updateGroupCallConnection connection = (TL_update.TL_updateGroupCallConnection) update;
+							if (!connection.presentation) {
+								myParams = connection.params;
 							}
 						}
 					}
+					// The room's socket update may have arrived before this connection payload.
+					onGroupCallUpdated(joiningCall.call);
 					MessagesController.getInstance(currentAccount).processUpdates(updates, false);
-					AndroidUtilities.runOnUIThread(() -> groupCall.loadMembers(create));
+					joiningCall.loadMembers(create);
 					startGroupCheckShortpoll();
+				} else if (error == null) {
+					hangUp(0);
 				} else {
-					AndroidUtilities.runOnUIThread(() -> {
-						if ("JOIN_AS_PEER_INVALID".equals(error.text)) {
-							if (chat != null) {
-								TLRPC.ChatFull chatFull = MessagesController.getInstance(currentAccount).getChatFull(chat.id);
-								if (chatFull != null) {
-									if (chatFull instanceof TLRPC.TL_chatFull) {
-										chatFull.flags &= ~32768;
-									} else {
-										chatFull.flags &= ~67108864;
-									}
-									chatFull.groupcall_default_join_as = null;
-									JoinCallAlert.resetCache();
+					if ("JOIN_AS_PEER_INVALID".equals(error.text)) {
+						if (chat != null) {
+							TLRPC.ChatFull chatFull = MessagesController.getInstance(currentAccount).getChatFull(chat.id);
+							if (chatFull != null) {
+								if (chatFull instanceof TLRPC.TL_chatFull) {
+									chatFull.flags &= ~32768;
+								} else {
+									chatFull.flags &= ~67108864;
 								}
+								chatFull.groupcall_default_join_as = null;
+								JoinCallAlert.resetCache();
 							}
-							hangUp(2);
-						} else if ("GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
-							createGroupInstance(CAPTURE_DEVICE_CAMERA, false, false);
-						} else {
-							if ("GROUPCALL_INVALID".equals(error.text) && chat != null) {
-								MessagesController.getInstance(currentAccount).loadFullChat(chat.id, 0, true);
-							}
-							NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.needShowAlert, 6, error.text);
-							hangUp(0);
 						}
-					});
+						hangUp(2);
+					} else if ("GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
+						createGroupInstance(CAPTURE_DEVICE_CAMERA, false, false);
+					} else {
+						if ("GROUPCALL_INVALID".equals(error.text) && chat != null) {
+							MessagesController.getInstance(currentAccount).loadFullChat(chat.id, 0, true);
+						}
+						NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.needShowAlert, 6, error.text);
+						hangUp(0);
+					}
 				}
-			});
+			}));
 		}
 	}
 
@@ -2659,8 +2692,15 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		}
 	}
 
+	private boolean isCurrentGroupJoin(ChatObject.Call joiningCall, int type, int attempt) {
+		return sharedInstance == this && joiningCall == groupCall && joiningCall.call != null
+				&& !(joiningCall.call instanceof TLRPC.TL_groupCallDiscarded)
+				&& tgVoip[type] != null && groupJoinAttempts[type] == attempt
+				&& !isHangingUp() && !isFinished();
+	}
+
 	private void startScreenCapture(int ssrc, String json) {
-		if (getSharedInstance() == null || groupCall == null) {
+		if (getSharedInstance() != this || groupCall == null || tgVoip[CAPTURE_DEVICE_SCREEN] == null) {
 			return;
 		}
 		mySource[CAPTURE_DEVICE_SCREEN] = 0;
@@ -2669,83 +2709,80 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		req.params = new TLRPC.TL_dataJSON();
 		req.params.data = json;
 		final NativeInstance screenInstance = tgVoip[CAPTURE_DEVICE_SCREEN];
-		ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
-			if (response != null) {
-				AndroidUtilities.runOnUIThread(() -> mySource[CAPTURE_DEVICE_SCREEN] = ssrc);
+		final ChatObject.Call joiningCall = groupCall;
+		final int attempt = ++groupJoinAttempts[CAPTURE_DEVICE_SCREEN];
+		ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+			if (!isCurrentGroupJoin(joiningCall, CAPTURE_DEVICE_SCREEN, attempt)
+					|| tgVoip[CAPTURE_DEVICE_SCREEN] != screenInstance) {
+				return;
+			}
+			if (response instanceof TLRPC.Updates) {
+				mySource[CAPTURE_DEVICE_SCREEN] = ssrc;
 				TLRPC.Updates updates = (TLRPC.Updates) response;
-				AndroidUtilities.runOnUIThread(() -> {
-					if (tgVoip[CAPTURE_DEVICE_SCREEN] != null) {
-						long selfId = getSelfId();
-						for (int a = 0, N = updates.updates.size(); a < N; a++) {
-							TLRPC.Update update = updates.updates.get(a);
-							if (update instanceof TL_update.TL_updateGroupCallConnection) {
-								TL_update.TL_updateGroupCallConnection updateGroupCallConnection = (TL_update.TL_updateGroupCallConnection) update;
-								if (updateGroupCallConnection.presentation) {
-									tgVoip[CAPTURE_DEVICE_SCREEN].setJoinResponsePayload(updateGroupCallConnection.params.data);
-								}
-							} else if (update instanceof TL_update.TL_updateGroupCallParticipants) {
-								TL_update.TL_updateGroupCallParticipants updateGroupCallParticipants = (TL_update.TL_updateGroupCallParticipants) update;
-								for (int b = 0, N2 = updateGroupCallParticipants.participants.size(); b < N2; b++) {
-									TLRPC.GroupCallParticipant participant = updateGroupCallParticipants.participants.get(b);
-									if (MessageObject.getPeerId(participant.peer) == selfId) {
-										if (participant.presentation != null) {
-											if ((participant.presentation.flags & 2) != 0) {
-												mySource[CAPTURE_DEVICE_SCREEN] = participant.presentation.audio_source;
-											} else {
-												for (int c = 0, N3 = participant.presentation.source_groups.size(); c < N3; c++) {
-													TLRPC.TL_groupCallParticipantVideoSourceGroup sourceGroup = participant.presentation.source_groups.get(c);
-													if (sourceGroup.sources.size() > 0) {
-														mySource[CAPTURE_DEVICE_SCREEN] = sourceGroup.sources.get(0);
-													}
-												}
+				long selfId = getSelfId();
+				for (int a = 0, N = updates.updates.size(); a < N; a++) {
+					TLRPC.Update update = updates.updates.get(a);
+					if (update instanceof TL_update.TL_updateGroupCallConnection) {
+						TL_update.TL_updateGroupCallConnection updateGroupCallConnection = (TL_update.TL_updateGroupCallConnection) update;
+						if (updateGroupCallConnection.presentation) {
+							screenInstance.setJoinResponsePayload(updateGroupCallConnection.params.data);
+						}
+					} else if (update instanceof TL_update.TL_updateGroupCallParticipants) {
+						TL_update.TL_updateGroupCallParticipants updateGroupCallParticipants = (TL_update.TL_updateGroupCallParticipants) update;
+						for (int b = 0, N2 = updateGroupCallParticipants.participants.size(); b < N2; b++) {
+							TLRPC.GroupCallParticipant participant = updateGroupCallParticipants.participants.get(b);
+							if (MessageObject.getPeerId(participant.peer) == selfId) {
+								if (participant.presentation != null) {
+									if ((participant.presentation.flags & 2) != 0) {
+										mySource[CAPTURE_DEVICE_SCREEN] = participant.presentation.audio_source;
+									} else {
+										for (int c = 0, N3 = participant.presentation.source_groups.size(); c < N3; c++) {
+											TLRPC.TL_groupCallParticipantVideoSourceGroup sourceGroup = participant.presentation.source_groups.get(c);
+											if (sourceGroup.sources.size() > 0) {
+												mySource[CAPTURE_DEVICE_SCREEN] = sourceGroup.sources.get(0);
 											}
 										}
-										break;
 									}
 								}
+								break;
 							}
 						}
 					}
-				});
+				}
 				MessagesController.getInstance(currentAccount).processUpdates(updates, false);
 				startGroupCheckShortpoll();
 			} else {
-				AndroidUtilities.runOnUIThread(() -> {
-					if (sharedInstance != this || groupCall == null || tgVoip[CAPTURE_DEVICE_SCREEN] != screenInstance) {
-						return;
-					}
-					// A rejected presentation must release native screen capture. Only
-					// duplicate-SSRC retries keep it alive for the replacement join.
-					if (error == null || !"GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
-						stopScreenCapture();
-					}
-					if (error == null) return;
-					if ("GROUPCALL_VIDEO_TOO_MUCH".equals(error.text)) {
-						groupCall.reloadGroupCall();
-					} else if ("JOIN_AS_PEER_INVALID".equals(error.text)) {
-						if (chat != null) {
-							TLRPC.ChatFull chatFull = MessagesController.getInstance(currentAccount).getChatFull(chat.id);
-							if (chatFull != null) {
-								if (chatFull instanceof TLRPC.TL_chatFull) {
-									chatFull.flags &= ~32768;
-								} else {
-									chatFull.flags &= ~67108864;
-								}
-								chatFull.groupcall_default_join_as = null;
-								JoinCallAlert.resetCache();
+				// A rejected presentation must release native screen capture. Only
+				// duplicate-SSRC retries keep it alive for the replacement join.
+				if (error == null || !"GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
+					stopScreenCapture();
+				}
+				if (error == null) return;
+				if ("GROUPCALL_VIDEO_TOO_MUCH".equals(error.text)) {
+					groupCall.reloadGroupCall();
+				} else if ("JOIN_AS_PEER_INVALID".equals(error.text)) {
+					if (chat != null) {
+						TLRPC.ChatFull chatFull = MessagesController.getInstance(currentAccount).getChatFull(chat.id);
+						if (chatFull != null) {
+							if (chatFull instanceof TLRPC.TL_chatFull) {
+								chatFull.flags &= ~32768;
+							} else {
+								chatFull.flags &= ~67108864;
 							}
-						}
-						hangUp(2);
-					} else if ("GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
-						createGroupInstance(CAPTURE_DEVICE_SCREEN, false, false);
-					} else {
-						if ("GROUPCALL_INVALID".equals(error.text) && chat != null) {
-							MessagesController.getInstance(currentAccount).loadFullChat(chat.id, 0, true);
+							chatFull.groupcall_default_join_as = null;
+							JoinCallAlert.resetCache();
 						}
 					}
-				});
+					hangUp(2);
+				} else if ("GROUPCALL_SSRC_DUPLICATE_MUCH".equals(error.text)) {
+					createGroupInstance(CAPTURE_DEVICE_SCREEN, false, false);
+				} else {
+					if ("GROUPCALL_INVALID".equals(error.text) && chat != null) {
+						MessagesController.getInstance(currentAccount).loadFullChat(chat.id, 0, true);
+					}
+				}
 			}
-		});
+		}));
 	}
 
 	private Runnable shortPollRunnable;
@@ -3068,6 +3105,10 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 //			if (captureDevice[type] != 0 && type == 0 && convertingVoip != null && convertingVoip.hasVideoCapturer()) {
 //				tgVoip[type].setupOutgoingVideoCreated(captureDevice[type]);
 //			}
+		}
+		groupJoinAttempts[type]++;
+		if (type == CAPTURE_DEVICE_CAMERA) {
+			myParams = null;
 		}
 		tgVoip[type].resetGroupInstance(!created, false);
 		if (conference != null && conference.getCallId() != -1) {
@@ -3508,6 +3549,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				}
 			}));
 			tgVoip[CAPTURE_DEVICE_CAMERA].setMuteMicrophone(micMute);
+			deliverPendingCallSignaling(tgVoip[CAPTURE_DEVICE_CAMERA]);
 
 			if (newAvailable != isVideoAvailable) {
 				isVideoAvailable = newAvailable;
@@ -4146,6 +4188,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 
 	@Override
 	public void onDestroy() {
+		pendingCallSignaling.clear();
 		if (BuildVars.LOGS_ENABLED) {
 			FileLog.d("=============== VoIPService STOPPING ===============");
 		}
