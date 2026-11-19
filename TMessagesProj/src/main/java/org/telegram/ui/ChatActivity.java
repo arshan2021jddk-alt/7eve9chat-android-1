@@ -16559,7 +16559,7 @@ public class ChatActivity extends BaseFragment implements
         }
         updateFloatingTopicView();
         invalidateChatListViewTopPadding();
-        if (!firstLoading && !paused && !inPreviewMode && (chatMode == 0 || chatMode == MODE_SUGGESTIONS) && !getMessagesController().ignoreSetOnline) {
+        if (!firstLoading && !paused && !ApplicationLoader.mainInterfacePaused && !inPreviewMode && (chatMode == 0 || chatMode == MODE_SUGGESTIONS) && !getMessagesController().ignoreSetOnline) {
             int scheduledRead = 0;
             if ((maxPositiveUnreadId != Integer.MIN_VALUE || maxNegativeUnreadId != Integer.MAX_VALUE)) {
                 int counterDecrement = 0;
@@ -16598,20 +16598,6 @@ public class ChatActivity extends BaseFragment implements
                 }
                 getMessagesController().markDialogAsRead(dialog_id, maxPositiveUnreadId, maxNegativeUnreadId, maxUnreadDate, false, threadId, counterDecrement, maxPositiveUnreadId == minMessageId[0] || maxNegativeUnreadId == minMessageId[0], scheduledRead);
                 firstUnreadSent = true;
-            } else if (!firstUnreadSent && currentEncryptedChat == null) {
-                if (chatLayoutManager.findFirstVisibleItemPosition() == 0) {
-                    newUnreadMessageCount = 0;
-                    if (inLayout) {
-                        AndroidUtilities.runOnUIThread(this::inlineUpdate2);
-                    } else {
-                        inlineUpdate2();
-                    }
-                    getMessagesController().markDialogAsRead(dialog_id, minMessageId[0], minMessageId[0], maxDate[0], false, threadId, 0, true, scheduledRead);
-                    if (isTopic && replyOriginalChat != null) {
-                        getMessagesStorage().updateRepliesMaxReadId(replyOriginalChat.id, replyOriginalMessageId, Math.max(maxPositiveUnreadId, replyMaxReadId), 0, true);
-                    }
-                    firstUnreadSent = true;
-                }
             }
 
             if (threadId != 0 && maxPositiveUnreadId > 0 && replyMaxReadId != maxPositiveUnreadId && (replyOriginalChat != null || UserObject.isBotForum(currentUser) || ChatObject.isMonoForum(currentChat) && ChatObject.canManageMonoForum(currentAccount, currentChat))) {

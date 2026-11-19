@@ -5,6 +5,8 @@ import io.socket.client.Socket;
 
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.UserConfig;
@@ -50,6 +52,25 @@ public class SocketBridge {
     private Socket socket;
     private String socketHost = ApiHost.PRIMARY;
     private int connectErrors;
+    private final Runnable presenceHeartbeat = this::publishForeground;
+
+    public static void onForegroundChanged() {
+        synchronized (SocketBridge.class) {
+            for (SocketBridge bridge : instances) {
+                if (bridge != null) bridge.publishForeground();
+            }
+        }
+    }
+
+    private void publishForeground() {
+        AndroidUtilities.cancelRunOnUIThread(presenceHeartbeat);
+        boolean active = !ApplicationLoader.mainInterfacePaused;
+        Socket current = socket;
+        if (current != null && current.connected()) {
+            current.emit("presence_foreground", active);
+            if (active) AndroidUtilities.runOnUIThread(presenceHeartbeat, 15000);
+        }
+    }
     // Group/channel rooms (typing etc. are broadcast per conversation room);
     // re-joined on every (re)connect.
     private final java.util.Set<String> conversationRooms =
@@ -168,6 +189,7 @@ public class SocketBridge {
         final Socket connectedSocket = socket;
         socket.on(Socket.EVENT_CONNECT, args -> {
             connectErrors = 0;
+            AndroidUtilities.runOnUIThread(this::publishForeground);
             ConnectionsManager.getInstance(currentAccount).setRestConnectionState(ConnectionsManager.ConnectionStateConnected);
             for (String room : conversationRooms) {
                 connectedSocket.emit("join_conversation", room);

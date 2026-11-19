@@ -2124,10 +2124,13 @@ public class RestBridge {
             }
             if (request instanceof TLRPC.TL_channels_readHistory) {
                 TLRPC.TL_channels_readHistory req = (TLRPC.TL_channels_readHistory) request;
-                JSONObject body = new JSONObject();
-                body.put("maxId", req.max_id);
                 String boundary = getMessageMongoId(req.max_id);
-                if (boundary != null) body.put("maxMessageId", boundary);
+                if (ApplicationLoader.mainInterfacePaused || boundary == null) {
+                    complete(onComplete, new TLRPC.TL_boolTrue(), null);
+                    return true;
+                }
+                JSONObject body = new JSONObject();
+                body.put("maxMessageId", boundary);
                 handleSimpleConversationCall(req.channel.channel_id, "POST", "/read", body, new TLRPC.TL_boolTrue(), onComplete, "/messages/conversations/");
                 return true;
             }
@@ -6053,14 +6056,13 @@ public class RestBridge {
             try {
                 String conversationId = resolveConversationId(req.peer);
                 TLRPC.TL_messages_affectedMessages result = new TLRPC.TL_messages_affectedMessages();
-                if (conversationId == null) {
+                String boundary = getMessageMongoId(req.max_id);
+                if (ApplicationLoader.mainInterfacePaused || conversationId == null || boundary == null) {
                     complete(onComplete, result, null);
                     return;
                 }
                 JSONObject body = new JSONObject();
-                body.put("maxId", req.max_id);
-                String boundary = getMessageMongoId(req.max_id);
-                if (boundary != null) body.put("maxMessageId", boundary);
+                body.put("maxMessageId", boundary);
                 JSONObject receipt = request("POST", "/messages/conversations/" + conversationId + "/read", body, true);
                 SocketBridge.getInstance(currentAccount).applyReadReceipt(receipt);
                 complete(onComplete, result, null);
