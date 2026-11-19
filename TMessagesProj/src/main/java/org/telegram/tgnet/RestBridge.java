@@ -7710,7 +7710,12 @@ public class RestBridge {
                     body.put("revert", true);
                 } else {
                     if (path == null && !noFile) throw new IllegalArgumentException("WALLPAPER_INVALID");
-                    if (path != null) body.put("url", path);
+                    if (path != null) {
+                        body.put("url", path);
+                        if (settings != null && settings.has("background_color") && settings.optInt("intensity") != 0) {
+                            settings.put("pattern", true);
+                        }
+                    }
                     body.put("noFile", noFile);
                     body.put("settings", settings);
                 }
